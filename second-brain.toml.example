@@ -1,0 +1,29 @@
+[database]
+url = "postgresql://secondbrain:secondbrain@localhost:5432/secondbrain"
+
+[notes]
+paths = [
+    "~/notes",
+    # "~/example_project/docs",
+]
+
+[embedding]
+provider = "tei"              # "tei" or "openai"
+url = "http://localhost:8090" # any TEI/OpenAI-compatible endpoint (local or remote)
+model = "nomic-embed-text"    # model name (provider-specific)
+dimensions = 768              # must match model output dimensions
+batch_size = 32               # number of texts per embedding request
+
+# Optional: LLM for autonomous skill execution (not needed for interactive use)
+# [llm]
+# provider = "anthropic"
+# model = "claude-sonnet-4-20250514"
+# api_key = "sk-..."   # or set ANTHROPIC_API_KEY env var
+
+# Project directories to observe (symlinked into the KB)
+# [[projects]]
+# name = "example_project"
+# path = "~/example_project"
+# branch = "main"
+# patterns = ["docs/**/*.md", "README.md", "**/README.md"]
+# mirror_to = "projects/example_project"
