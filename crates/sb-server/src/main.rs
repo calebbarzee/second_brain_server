@@ -3,7 +3,7 @@ mod tools;
 use anyhow::Result;
 use clap::Parser;
 use rmcp::ServiceExt;
-use sb_embed::{EmbeddingPipeline, TeiProvider};
+use sb_embed::{ChunkerConfig, EmbeddingPipeline, OpenAiProvider, TeiProvider};
 use sb_skills::{SkillContext, SkillRegistry, SkillRunner};
 use sb_sync::{FileWatcher, SyncProcessor, WatcherConfig};
 use std::path::PathBuf;
@@ -60,23 +60,45 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(config.embedding.dimensions);
+    let embedding_provider =
+        std::env::var("EMBEDDING_PROVIDER").unwrap_or_else(|_| config.embedding.provider.clone());
 
     tracing::info!(
-        "embedding provider: TEI at {}, model={}, dims={}",
+        "embedding provider: {} at {}, model={}, dims={}",
+        embedding_provider,
         embedding_url,
         embedding_model,
         embedding_dims
     );
 
-    let provider = Arc::new(TeiProvider::new(
-        &embedding_url,
-        &embedding_model,
-        embedding_dims,
-    ));
+    let provider: Arc<dyn sb_embed::EmbeddingProvider> = match embedding_provider.as_str() {
+        "openai" | "ollama" => Arc::new(OpenAiProvider::new(
+            &embedding_url,
+            &embedding_model,
+            embedding_dims,
+            std::env::var("EMBEDDING_API_KEY").ok(),
+        )),
+        _ => Arc::new(TeiProvider::new(
+            &embedding_url,
+            &embedding_model,
+            embedding_dims,
+        )),
+    };
+
+    let chunker_config = ChunkerConfig {
+        max_chunk_chars: config.embedding.max_chunk_chars,
+        ..ChunkerConfig::default()
+    };
     let pipeline = Arc::new(EmbeddingPipeline::new(
         provider,
         config.embedding.batch_size,
+        chunker_config,
     ));
+
+    // Ensure HNSW index matches configured dimensions
+    if let Err(e) = sb_core::db::embeddings::ensure_vector_index(db.pool(), embedding_dims).await {
+        tracing::warn!("could not create vector index (non-fatal): {e}");
+    }
 
     // Set up optional LLM provider
     let llm_provider: Option<Arc<dyn sb_skills::llm::LlmProvider>> =

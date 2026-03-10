@@ -94,6 +94,57 @@ pub async fn semantic_search(
         .collect())
 }
 
+/// Semantic search with optional lifecycle and project filters.
+pub async fn semantic_search_filtered(
+    pool: &PgPool,
+    query_vector: &[f32],
+    lifecycle: Option<&str>,
+    project_id: Option<Uuid>,
+    limit: i64,
+) -> anyhow::Result<Vec<SemanticSearchResult>> {
+    let vec = Vector::from(query_vector.to_vec());
+
+    let rows = sqlx::query_as::<_, (Uuid, Uuid, String, Option<String>, String, String, f64)>(
+        r#"
+        SELECT
+            c.id AS chunk_id,
+            c.note_id,
+            c.content AS chunk_content,
+            c.heading_context,
+            n.title AS note_title,
+            n.file_path AS note_file_path,
+            1 - (e.vector <=> $1::vector) AS similarity
+        FROM embeddings e
+        JOIN chunks c ON c.id = e.chunk_id
+        JOIN notes n ON n.id = c.note_id AND n.deleted = false
+        LEFT JOIN note_projects np ON np.note_id = n.id
+        WHERE ($2::TEXT IS NULL OR n.lifecycle = $2)
+          AND ($3::UUID IS NULL OR np.project_id = $3)
+        ORDER BY e.vector <=> $1::vector
+        LIMIT $4
+        "#,
+    )
+    .bind(vec)
+    .bind(lifecycle)
+    .bind(project_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| SemanticSearchResult {
+            chunk_id: r.0,
+            note_id: r.1,
+            chunk_content: r.2,
+            heading_context: r.3,
+            note_title: r.4,
+            note_file_path: r.5,
+            similarity: r.6,
+        })
+        .collect())
+}
+
 /// Find chunks similar to a specific note's chunks (for "find related" feature).
 pub async fn find_related_notes(
     pool: &PgPool,
@@ -152,4 +203,24 @@ pub async fn count_embeddings(pool: &PgPool) -> anyhow::Result<i64> {
         .fetch_one(pool)
         .await?;
     Ok(row.0)
+}
+
+/// Ensure the HNSW vector index exists for the given dimensions.
+/// Creates an expression-based index if the column is unconstrained.
+/// Safe to call multiple times — drops and recreates if needed.
+pub async fn ensure_vector_index(pool: &PgPool, dimensions: usize) -> anyhow::Result<()> {
+    // Drop existing index (may be for wrong dimensions)
+    sqlx::query("DROP INDEX IF EXISTS idx_embeddings_vector")
+        .execute(pool)
+        .await?;
+
+    // Create expression-based HNSW index for the specific dimension
+    let sql = format!(
+        "CREATE INDEX idx_embeddings_vector ON embeddings \
+         USING hnsw ((vector::vector({dimensions})) vector_cosine_ops)"
+    );
+    sqlx::query(&sql).execute(pool).await?;
+
+    tracing::info!("HNSW vector index created for {dimensions} dimensions");
+    Ok(())
 }

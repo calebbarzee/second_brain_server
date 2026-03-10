@@ -495,9 +495,24 @@ fn make_pipeline(config: &sb_core::Config) -> sb_embed::EmbeddingPipeline {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(config.embedding.dimensions);
+    let provider_name =
+        std::env::var("EMBEDDING_PROVIDER").unwrap_or_else(|_| config.embedding.provider.clone());
 
-    let provider = Arc::new(sb_embed::TeiProvider::new(&url, &model, dims));
-    sb_embed::EmbeddingPipeline::new(provider, config.embedding.batch_size)
+    let provider: Arc<dyn sb_embed::EmbeddingProvider> = match provider_name.as_str() {
+        "openai" | "ollama" => Arc::new(sb_embed::OpenAiProvider::new(
+            &url,
+            &model,
+            dims,
+            std::env::var("EMBEDDING_API_KEY").ok(),
+        )),
+        _ => Arc::new(sb_embed::TeiProvider::new(&url, &model, dims)),
+    };
+
+    let chunker_config = sb_embed::ChunkerConfig {
+        max_chunk_chars: config.embedding.max_chunk_chars,
+        ..sb_embed::ChunkerConfig::default()
+    };
+    sb_embed::EmbeddingPipeline::new(provider, config.embedding.batch_size, chunker_config)
 }
 
 fn truncate(s: &str, max: usize) -> String {

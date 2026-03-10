@@ -451,12 +451,24 @@ impl SecondBrainServer {
             .await
             .map_err(|e| McpError::internal_error(format!("query embedding failed: {e}"), None))?;
 
-        let results =
+        let project_id = resolve_project_id(&self.db, params.project.as_deref()).await;
+
+        let results = if params.lifecycle.is_some() || project_id.is_some() {
+            sb_core::db::embeddings::semantic_search_filtered(
+                self.db.pool(),
+                &query_vector,
+                params.lifecycle.as_deref(),
+                project_id,
+                limit,
+            )
+            .await
+        } else {
             sb_core::db::embeddings::semantic_search(self.db.pool(), &query_vector, limit)
                 .await
-                .map_err(|e| {
-                    McpError::internal_error(format!("semantic search failed: {e}"), None)
-                })?;
+        }
+        .map_err(|e| {
+            McpError::internal_error(format!("semantic search failed: {e}"), None)
+        })?;
 
         if results.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
@@ -552,21 +564,25 @@ impl SecondBrainServer {
     )]
     async fn embed_notes(
         &self,
-        Parameters(_params): Parameters<EmbedNotesParams>,
+        Parameters(params): Parameters<EmbedNotesParams>,
     ) -> Result<CallToolResult, McpError> {
-        let stats = self
-            .pipeline
-            .process_unembedded(self.db.pool())
-            .await
-            .map_err(|e| McpError::internal_error(format!("embedding failed: {e}"), None))?;
+        let only_new = params.only_new.unwrap_or(true);
+
+        let stats = if only_new {
+            self.pipeline.process_unembedded(self.db.pool()).await
+        } else {
+            self.pipeline.process_all(self.db.pool()).await
+        }
+        .map_err(|e| McpError::internal_error(format!("embedding failed: {e}"), None))?;
 
         let total = sb_core::db::embeddings::count_embeddings(self.db.pool())
             .await
             .unwrap_or(0);
 
+        let mode = if only_new { "new only" } else { "full re-embed" };
         let mut msg = format!(
-            "Embedding complete: {} notes processed, {} chunks created, {} embeddings generated\nTotal embeddings in database: {}",
-            stats.notes_processed, stats.chunks_created, stats.embeddings_created, total
+            "Embedding complete ({}): {} notes processed, {} chunks created, {} embeddings generated\nTotal embeddings in database: {}",
+            mode, stats.notes_processed, stats.chunks_created, stats.embeddings_created, total
         );
 
         if !stats.errors.is_empty() {

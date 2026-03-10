@@ -2,17 +2,34 @@
 url = "postgresql://secondbrain:secondbrain@localhost:5432/secondbrain"
 
 [notes]
-paths = [
-    "~/notes",
-    # "~/example_project/docs",
-]
+paths = ["~/notes"]  # Directories to watch for markdown notes
 
 [embedding]
-provider = "tei"              # "tei" or "openai"
-url = "http://localhost:8090" # any TEI/OpenAI-compatible endpoint (local or remote)
-model = "nomic-embed-text"    # model name (provider-specific)
-dimensions = 768              # must match model output dimensions
-batch_size = 32               # number of texts per embedding request
+# Provider: "tei" (Hugging Face TEI), "openai" (OpenAI-compatible, also works for Ollama)
+provider = "tei"
+url = "http://localhost:8090"       # Embedding server URL
+model = "BAAI/bge-base-en-v1.5"    # Model name
+dimensions = 768                    # Vector dimensions
+batch_size = 32                     # Texts per batch request
+max_chunk_chars = 1200              # Max characters per chunk (~300 tokens)
+
+# Example: Ollama with qwen3-embedding
+# [embedding]
+# provider = "openai"              # Ollama uses OpenAI-compatible API
+# url = "http://localhost:11434"    # Ollama default
+# model = "qwen3-embedding"
+# dimensions = 1024                 # Matryoshka: 512, 1024, 2048, or 4096
+# batch_size = 16
+# max_chunk_chars = 3000            # qwen3 supports 8192 tokens
+
+# Example: OpenAI cloud
+# [embedding]
+# provider = "openai"
+# url = "https://api.openai.com"
+# model = "text-embedding-3-small"
+# dimensions = 1536
+# batch_size = 64
+# max_chunk_chars = 2400
 
 # Optional: LLM for autonomous skill execution (not needed for interactive use)
 # [llm]

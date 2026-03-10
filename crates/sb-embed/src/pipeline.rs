@@ -1,4 +1,4 @@
-use crate::chunker::Chunker;
+use crate::chunker::{Chunker, ChunkerConfig};
 use crate::provider::EmbeddingProvider;
 use sb_core::db::{chunks, embeddings};
 use sb_core::models::Note;
@@ -22,10 +22,10 @@ pub struct PipelineStats {
 }
 
 impl EmbeddingPipeline {
-    pub fn new(provider: Arc<dyn EmbeddingProvider>, batch_size: usize) -> Self {
+    pub fn new(provider: Arc<dyn EmbeddingProvider>, batch_size: usize, chunker_config: ChunkerConfig) -> Self {
         Self {
             provider,
-            chunker: Chunker::default(),
+            chunker: Chunker::new(chunker_config),
             batch_size,
         }
     }
@@ -117,6 +117,26 @@ impl EmbeddingPipeline {
             }
         }
 
+        Ok(stats)
+    }
+
+    /// Re-process ALL notes (re-chunk and re-embed everything).
+    pub async fn process_all(&self, pool: &PgPool) -> anyhow::Result<PipelineStats> {
+        let mut stats = PipelineStats::default();
+        let notes = sb_core::db::notes::list_notes(pool, 100_000, 0).await?;
+        for note in &notes {
+            match self.process_note(pool, note).await {
+                Ok((c, e)) => {
+                    stats.notes_processed += 1;
+                    stats.chunks_created += c;
+                    stats.embeddings_created += e;
+                }
+                Err(err) => {
+                    stats.errors.push(format!("{}: {err}", note.file_path));
+                    tracing::error!("failed to process note '{}': {err}", note.file_path);
+                }
+            }
+        }
         Ok(stats)
     }
 

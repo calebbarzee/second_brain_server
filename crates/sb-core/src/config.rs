@@ -73,6 +73,9 @@ pub struct EmbeddingConfig {
     /// Batch size for embedding requests
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
+    /// Maximum characters per chunk (default: 1200, ~300 tokens for 512-token models)
+    #[serde(default = "default_max_chunk_chars")]
+    pub max_chunk_chars: usize,
 }
 
 impl Default for EmbeddingConfig {
@@ -83,6 +86,7 @@ impl Default for EmbeddingConfig {
             model: default_model(),
             dimensions: default_dimensions(),
             batch_size: default_batch_size(),
+            max_chunk_chars: default_max_chunk_chars(),
         }
     }
 }
@@ -101,6 +105,9 @@ fn default_dimensions() -> usize {
 }
 fn default_batch_size() -> usize {
     32
+}
+fn default_max_chunk_chars() -> usize {
+    1200
 }
 
 impl Config {
