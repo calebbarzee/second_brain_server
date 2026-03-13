@@ -9,12 +9,30 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Transport {
+    Stdio,
+    Http,
+}
+
 #[derive(Parser)]
 #[command(name = "second-brain", about = "Second Brain MCP Server")]
 struct Cli {
     /// Path to config file
     #[arg(short, long)]
     config: Option<String>,
+
+    /// Transport: stdio (default, for local MCP) or http (network-accessible)
+    #[arg(long, default_value = "stdio")]
+    transport: Transport,
+
+    /// Host to bind HTTP server to (default: 0.0.0.0)
+    #[arg(long, default_value = "0.0.0.0")]
+    host: String,
+
+    /// Port for HTTP transport (default: 8080)
+    #[arg(long, default_value_t = 8080)]
+    port: u16,
 
     /// Directories to watch for markdown changes (comma-separated).
     /// Overrides config file paths. Also settable via WATCH_PATHS env var.
@@ -24,7 +42,15 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Log to stderr — stdout is the MCP stdio transport
+    let cli = Cli::parse();
+
+    // Log to stderr for stdio (stdout = JSON-RPC), stdout for HTTP
+    let log_writer: Box<dyn std::io::Write + Send> = if cli.transport == Transport::Stdio {
+        Box::new(std::io::stderr())
+    } else {
+        Box::new(std::io::stdout())
+    };
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::from_default_env()
@@ -35,11 +61,9 @@ async fn main() -> Result<()> {
                 .add_directive("sb_skills=info".parse()?)
                 .add_directive("rmcp=warn".parse()?),
         )
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
+        .with_writer(std::sync::Mutex::new(log_writer))
+        .with_ansi(cli.transport == Transport::Http)
         .init();
-
-    let cli = Cli::parse();
 
     // Load config
     let config = match &cli.config {
@@ -129,9 +153,24 @@ async fn main() -> Result<()> {
         tracing::info!("no watch paths configured — file watcher disabled");
     }
 
-    tracing::info!("starting MCP server (15 tools)");
+    match cli.transport {
+        Transport::Stdio => run_stdio(db, pipeline, skill_runner, watch_paths).await,
+        Transport::Http => {
+            run_http(db, pipeline, skill_runner, watch_paths, &cli.host, cli.port).await
+        }
+    }
+}
 
-    let server = tools::SecondBrainServer::new(db, pipeline, skill_runner, watch_paths.clone());
+/// Run the MCP server over stdin/stdout (for local Claude Code integration).
+async fn run_stdio(
+    db: sb_core::Database,
+    pipeline: Arc<sb_embed::EmbeddingPipeline>,
+    skill_runner: Arc<SkillRunner>,
+    watch_paths: Vec<PathBuf>,
+) -> Result<()> {
+    tracing::info!("starting MCP server on stdio (16 tools)");
+
+    let server = tools::SecondBrainServer::new(db, pipeline, skill_runner, watch_paths);
     let service = server
         .serve(rmcp::transport::stdio())
         .await
@@ -141,6 +180,62 @@ async fn main() -> Result<()> {
     service.waiting().await?;
 
     tracing::info!("MCP server shutting down");
+    Ok(())
+}
+
+/// Run the MCP server over HTTP with Streamable HTTP transport (network-accessible).
+async fn run_http(
+    db: sb_core::Database,
+    pipeline: Arc<sb_embed::EmbeddingPipeline>,
+    skill_runner: Arc<SkillRunner>,
+    watch_paths: Vec<PathBuf>,
+    host: &str,
+    port: u16,
+) -> Result<()> {
+    use rmcp::transport::streamable_http_server::{
+        session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+    };
+    use tokio_util::sync::CancellationToken;
+
+    let ct = CancellationToken::new();
+    let session_manager = Arc::new(LocalSessionManager::default());
+
+    let service = StreamableHttpService::new(
+        move || {
+            Ok(tools::SecondBrainServer::new(
+                db.clone(),
+                pipeline.clone(),
+                skill_runner.clone(),
+                watch_paths.clone(),
+            ))
+        },
+        session_manager,
+        StreamableHttpServerConfig {
+            stateful_mode: true,
+            json_response: false,
+            sse_keep_alive: Some(std::time::Duration::from_secs(15)),
+            sse_retry: Some(std::time::Duration::from_secs(3)),
+            cancellation_token: ct.child_token(),
+        },
+    );
+
+    let app = axum::Router::new().nest_service("/mcp", service);
+
+    let bind_addr = format!("{host}:{port}");
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+
+    tracing::info!("MCP server listening on http://{bind_addr}/mcp (16 tools)");
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("failed to listen for ctrl-c");
+            tracing::info!("shutting down HTTP server");
+            ct.cancel();
+        })
+        .await?;
+
     Ok(())
 }
 

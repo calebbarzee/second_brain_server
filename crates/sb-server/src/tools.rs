@@ -173,6 +173,14 @@ pub struct FileSearchParams {
     pub paths: Option<Vec<String>>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct NoteStampParams {
+    /// File path of the note to stamp
+    pub file_path: String,
+    /// Who made the edit — your username (e.g. "calebbarzee") or "ai"
+    pub editor: String,
+}
+
 fn default_search_mode() -> Option<String> {
     Some("content".to_string())
 }
@@ -600,7 +608,7 @@ impl SecondBrainServer {
     // ── Phase 3 tools: Sync & Links ─────────────────────────────
 
     #[tool(
-        description = "Create a new markdown note at the given file path. Writes the file to disk and ingests it into the database with embeddings. Parent directories are created automatically."
+        description = "Create a new markdown note at the given file path. Writes the file to disk and ingests it into the database with embeddings. Parent directories are created automatically. The note is automatically tagged with AI-edit metadata in its frontmatter, and changes are committed to git if the notes directory is a git repo."
     )]
     async fn note_create(
         &self,
@@ -626,8 +634,17 @@ impl SecondBrainServer {
                 .map_err(|e| McpError::internal_error(format!("mkdir failed: {e}"), None))?;
         }
 
-        std::fs::write(path, &params.content)
+        // Stamp AI-edit metadata into frontmatter
+        let stamped_content = sb_core::markdown::stamp_edit(&params.content, "ai");
+
+        std::fs::write(path, &stamped_content)
             .map_err(|e| McpError::internal_error(format!("write failed: {e}"), None))?;
+
+        // Git auto-commit (only this file)
+        let git_msg = self.git_commit_file(
+            path,
+            &format!("[second-brain] create: {}", params.file_path),
+        );
 
         match ingest::ingest_file(&self.db, path).await {
             Ok(IngestResult::Ingested(info)) => {
@@ -653,6 +670,11 @@ impl SecondBrainServer {
                     }
                 }
 
+                msg.push_str("\nFrontmatter: edited_by=ai tag added");
+                if let Some((branch, sha)) = git_msg {
+                    msg.push_str(&format!("\nGit: committed to {branch} ({sha})"));
+                }
+
                 Ok(CallToolResult::success(vec![Content::text(msg)]))
             }
             Ok(IngestResult::Skipped) => Ok(CallToolResult::success(vec![Content::text(
@@ -665,7 +687,7 @@ impl SecondBrainServer {
     }
 
     #[tool(
-        description = "Update an existing note's content. Writes the new content to disk and re-ingests into the database, updating links and embeddings."
+        description = "Update an existing note's content. Shows a diff of changes, tags the note with AI-edit metadata in frontmatter, writes to disk, re-ingests into the database, and commits to git. The response includes a unified diff so you can verify the changes."
     )]
     async fn note_update(
         &self,
@@ -680,8 +702,24 @@ impl SecondBrainServer {
             ))]));
         }
 
-        std::fs::write(path, &params.content)
+        // Read old content for diff
+        let old_content = std::fs::read_to_string(path)
+            .map_err(|e| McpError::internal_error(format!("read failed: {e}"), None))?;
+
+        // Stamp AI-edit metadata into frontmatter
+        let stamped_content = sb_core::markdown::stamp_edit(&params.content, "ai");
+
+        // Compute a simple unified diff
+        let diff = unified_diff(&old_content, &stamped_content, &params.file_path);
+
+        std::fs::write(path, &stamped_content)
             .map_err(|e| McpError::internal_error(format!("write failed: {e}"), None))?;
+
+        // Git auto-commit (only this file)
+        let git_sha = self.git_commit_file(
+            path,
+            &format!("[second-brain] update: {}", params.file_path),
+        );
 
         match ingest::ingest_file(&self.db, path).await {
             Ok(IngestResult::Ingested(info)) => {
@@ -705,6 +743,14 @@ impl SecondBrainServer {
                             msg.push_str(&format!("\nRe-embedding failed: {e}"));
                         }
                     }
+                }
+
+                msg.push_str("\nFrontmatter: edited_by=ai tag updated");
+                if let Some((branch, sha)) = git_sha {
+                    msg.push_str(&format!("\nGit: committed to {branch} ({sha})"));
+                }
+                if !diff.is_empty() {
+                    msg.push_str(&format!("\n\n--- Diff ---\n{diff}"));
                 }
 
                 Ok(CallToolResult::success(vec![Content::text(msg)]))
@@ -1092,6 +1138,41 @@ impl SecondBrainServer {
             note.title, note.lifecycle, lifecycle
         ))]))
     }
+
+    #[tool(
+        description = "Stamp a note's frontmatter with edit metadata. Use this to record who last edited a note and when. Sets `edited_by` and `last_<editor>_edit` timestamp in YAML frontmatter. Previous editor timestamps are preserved, so you can see the full edit history."
+    )]
+    async fn note_stamp(
+        &self,
+        Parameters(params): Parameters<NoteStampParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let path = Path::new(&params.file_path);
+
+        if !path.exists() {
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "File not found: {}",
+                params.file_path
+            ))]));
+        }
+
+        let old_content = std::fs::read_to_string(path)
+            .map_err(|e| McpError::internal_error(format!("read failed: {e}"), None))?;
+
+        let stamped = sb_core::markdown::stamp_edit(&old_content, &params.editor);
+
+        std::fs::write(path, &stamped)
+            .map_err(|e| McpError::internal_error(format!("write failed: {e}"), None))?;
+
+        // Re-ingest so the DB reflects the updated frontmatter
+        if let Err(e) = ingest::ingest_file(&self.db, path).await {
+            tracing::warn!("re-ingest after stamp failed: {e}");
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Stamped '{}' with edited_by={}, last_{}_edit=<now>",
+            params.file_path, params.editor, params.editor
+        ))]))
+    }
 }
 
 fn truncate(s: &str, max_len: usize) -> String {
@@ -1112,6 +1193,120 @@ async fn resolve_project_id(db: &Database, name: Option<&str>) -> Option<uuid::U
             .map(|p| p.id),
         None => None,
     }
+}
+
+/// Default AI commit author name. Override via AI_GIT_NAME env var.
+const DEFAULT_AI_NAME: &str = "claude-ai";
+/// Default AI commit author email. Override via AI_GIT_EMAIL env var.
+const DEFAULT_AI_EMAIL: &str = "ai@second-brain.local";
+
+impl SecondBrainServer {
+    /// Commit a single AI-authored file to the user's current branch.
+    ///
+    /// # Branch model
+    /// The user must already be on their working branch (e.g. `calebbarzee/weekly`).
+    /// The AI commits to that same branch with its own author identity so
+    /// human vs AI changes are visible in `git log`.
+    ///
+    /// Protected branches (main, master, staging, dev) are rejected.
+    /// The branch must be prefixed with the repo owner's git username.
+    ///
+    /// # Returns
+    /// `Some((branch, sha))` on success, `None` if git is unavailable or
+    /// the branch is invalid (with a warning logged).
+    fn git_commit_file(&self, file_path: &Path, message: &str) -> Option<(String, String)> {
+        let notes_root = self.notes_paths.first()?;
+        if !sb_skills::git_ops::is_git_repo(notes_root) {
+            return None;
+        }
+
+        // The repo owner is the git user.name configured in the notes repo
+        let repo_owner = match sb_skills::git_ops::git_username(notes_root) {
+            Ok(name) => name,
+            Err(e) => {
+                tracing::warn!("git config user.name not set, skipping commit: {e}");
+                return None;
+            }
+        };
+
+        let ai_name = std::env::var("AI_GIT_NAME")
+            .unwrap_or_else(|_| DEFAULT_AI_NAME.to_string());
+        let ai_email = std::env::var("AI_GIT_EMAIL")
+            .unwrap_or_else(|_| DEFAULT_AI_EMAIL.to_string());
+
+        match sb_skills::git_ops::commit_file(
+            notes_root,
+            file_path,
+            message,
+            &repo_owner,
+            &ai_name,
+            &ai_email,
+        ) {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::warn!("git commit skipped: {e}");
+                None
+            }
+        }
+    }
+}
+
+/// Produce a simple unified diff between two strings.
+fn unified_diff(old: &str, new: &str, path: &str) -> String {
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+
+    if old_lines == new_lines {
+        return String::new();
+    }
+
+    let mut out = format!("--- a/{path}\n+++ b/{path}\n");
+
+    // Simple line-by-line diff: show removed and added lines.
+    // Walk both sides, reporting contiguous changed hunks.
+    let max = old_lines.len().max(new_lines.len());
+    let mut i = 0;
+    while i < max {
+        let old_line = old_lines.get(i).copied();
+        let new_line = new_lines.get(i).copied();
+
+        if old_line == new_line {
+            i += 1;
+            continue;
+        }
+
+        // Found a difference — emit a hunk
+        let hunk_start = i;
+        // Scan forward to find the end of the changed region
+        while i < max {
+            let ol = old_lines.get(i).copied();
+            let nl = new_lines.get(i).copied();
+            if ol == nl {
+                break;
+            }
+            i += 1;
+        }
+
+        out.push_str(&format!("@@ -{},{} +{},{} @@\n",
+            hunk_start + 1, i - hunk_start,
+            hunk_start + 1, i - hunk_start,
+        ));
+
+        for j in hunk_start..i {
+            if let Some(ol) = old_lines.get(j) {
+                if new_lines.get(j) != Some(ol) {
+                    out.push_str(&format!("-{ol}\n"));
+                }
+            }
+            if let Some(nl) = new_lines.get(j) {
+                if old_lines.get(j) != Some(nl) {
+                    out.push_str(&format!("+{nl}\n"));
+                }
+            }
+        }
+    }
+
+    out
 }
 
 // ── ServerHandler impl ─────────────────────────────────────────

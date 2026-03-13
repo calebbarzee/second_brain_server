@@ -24,3 +24,5 @@ uuid.workspace = true
 chrono.workspace = true
 walkdir.workspace = true
 clap = { version = "4", features = ["derive"] }
+axum = "0.8"
+tokio-util = "0.7"

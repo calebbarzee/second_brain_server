@@ -5,6 +5,9 @@ Cargo.lock
 
 # Environment
 .env
+.env.prod
+
+second-brain.toml
 
 # IDE
 .idea/

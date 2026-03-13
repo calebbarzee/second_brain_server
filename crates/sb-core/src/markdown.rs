@@ -231,6 +231,72 @@ pub fn extract_tasks(body: &str) -> Vec<ParsedTask> {
     tasks
 }
 
+// ── Frontmatter writing ──────────────────────────────────────
+
+/// Serialize a JSON value back into YAML frontmatter string (with `---` fences).
+fn serialize_frontmatter(value: &serde_json::Value) -> String {
+    let mut lines = Vec::new();
+    if let serde_json::Value::Object(map) = value {
+        for (key, val) in map {
+            match val {
+                serde_json::Value::Array(arr) => {
+                    let items: Vec<String> = arr
+                        .iter()
+                        .map(|v| match v {
+                            serde_json::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        })
+                        .collect();
+                    lines.push(format!("{key}: [{}]", items.join(", ")));
+                }
+                serde_json::Value::String(s) => {
+                    lines.push(format!("{key}: {s}"));
+                }
+                other => {
+                    lines.push(format!("{key}: {other}"));
+                }
+            }
+        }
+    }
+    format!("---\n{}\n---\n", lines.join("\n"))
+}
+
+/// Inject edit metadata into a note's frontmatter.
+///
+/// Sets `edited_by` and `last_<editor>_edit` with a timestamp.
+/// Creates frontmatter if the note doesn't have any.
+/// Preserves all existing frontmatter fields.
+///
+/// # Arguments
+/// - `raw_content`: the full note markdown (may or may not have frontmatter)
+/// - `editor`: who made the edit — `"ai"` or a username like `"calebbarzee"`
+///
+/// # Frontmatter fields set
+/// - `edited_by: <editor>`
+/// - `last_<editor>_edit: <ISO 8601 timestamp>`
+pub fn stamp_edit(raw_content: &str, editor: &str) -> String {
+    let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    let (existing_fm, body) = extract_frontmatter(raw_content);
+
+    let mut map = match existing_fm {
+        Some(serde_json::Value::Object(m)) => m,
+        _ => serde_json::Map::new(),
+    };
+
+    map.insert(
+        "edited_by".to_string(),
+        serde_json::Value::String(editor.to_string()),
+    );
+    map.insert(
+        format!("last_{editor}_edit"),
+        serde_json::Value::String(timestamp),
+    );
+
+    let fm_str = serialize_frontmatter(&serde_json::Value::Object(map));
+    format!("{fm_str}\n{body}")
+}
+
 /// Compute a content hash for deduplication.
 pub fn content_hash(content: &str) -> String {
     let hash = xxhash_rust::xxh3::xxh3_64(content.as_bytes());
@@ -318,6 +384,62 @@ mod tests {
         assert!(parsed.tasks[1].completed);
         assert_eq!(parsed.tasks[1].title, "Write tests");
         assert!(parsed.tasks[2].completed);
+    }
+
+    #[test]
+    fn test_stamp_edit_ai_no_frontmatter() {
+        let raw = "# My Note\n\nBody text.\n";
+        let stamped = stamp_edit(raw, "ai");
+        assert!(stamped.starts_with("---\n"));
+        assert!(stamped.contains("edited_by: ai"));
+        assert!(stamped.contains("last_ai_edit:"));
+        assert!(stamped.contains("# My Note"));
+    }
+
+    #[test]
+    fn test_stamp_edit_ai_existing_frontmatter() {
+        let raw = "---\ntitle: Test\ntags: [rust, mcp]\n---\n\n# Content\n";
+        let stamped = stamp_edit(raw, "ai");
+        assert!(stamped.contains("title: Test"));
+        assert!(stamped.contains("tags: [rust, mcp]"));
+        assert!(stamped.contains("edited_by: ai"));
+        assert!(stamped.contains("# Content"));
+    }
+
+    #[test]
+    fn test_stamp_edit_updates_existing_stamp() {
+        let raw = "---\nedited_by: ai\nlast_ai_edit: 2020-01-01T00:00:00Z\n---\n\n# Old\n";
+        let stamped = stamp_edit(raw, "ai");
+        assert_eq!(stamped.matches("edited_by").count(), 1);
+        assert!(!stamped.contains("2020-01-01"));
+    }
+
+    #[test]
+    fn test_stamp_edit_human() {
+        let raw = "# Note\n\nContent.\n";
+        let stamped = stamp_edit(raw, "calebbarzee");
+        assert!(stamped.contains("edited_by: calebbarzee"));
+        assert!(stamped.contains("last_calebbarzee_edit:"));
+        assert!(stamped.contains("# Note"));
+    }
+
+    #[test]
+    fn test_stamp_edit_preserves_other_editor_timestamps() {
+        let raw = "---\nedited_by: ai\nlast_ai_edit: 2026-01-01T00:00:00Z\n---\n\n# Note\n";
+        let stamped = stamp_edit(raw, "calebbarzee");
+        // Should update edited_by to human, add human timestamp, keep AI timestamp
+        assert!(stamped.contains("edited_by: calebbarzee"));
+        assert!(stamped.contains("last_calebbarzee_edit:"));
+        assert!(stamped.contains("last_ai_edit: 2026-01-01"));
+    }
+
+    #[test]
+    fn test_serialize_frontmatter_roundtrip() {
+        let raw = "---\ntitle: Test\ntags: [a, b]\n---\n\n# Body\n";
+        let (fm, _body) = extract_frontmatter(raw);
+        let serialized = serialize_frontmatter(&fm.unwrap());
+        assert!(serialized.contains("title: Test"));
+        assert!(serialized.contains("tags: [a, b]"));
     }
 
     #[test]

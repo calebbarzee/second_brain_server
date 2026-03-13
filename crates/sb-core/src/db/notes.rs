@@ -23,6 +23,7 @@ pub async fn upsert_note(pool: &PgPool, note: &CreateNote) -> anyhow::Result<Not
              content_hash = EXCLUDED.content_hash,
              raw_content = EXCLUDED.raw_content,
              frontmatter = EXCLUDED.frontmatter,
+             deleted = false,
              updated_at = NOW(),
              synced_at = NOW()
          RETURNING {NOTE_COLS}"
