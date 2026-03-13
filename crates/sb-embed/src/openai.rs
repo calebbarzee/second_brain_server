@@ -49,6 +49,8 @@ impl OpenAiProvider {
 struct OpenAiEmbeddingRequest {
     input: Vec<String>,
     model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dimensions: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,6 +85,7 @@ impl EmbeddingProvider for OpenAiProvider {
         let request = OpenAiEmbeddingRequest {
             input: texts.iter().map(|s| s.to_string()).collect(),
             model: self.model.clone(),
+            dimensions: Some(self.dimensions),
         };
 
         let mut req = self
@@ -116,5 +119,47 @@ impl EmbeddingProvider for OpenAiProvider {
         }
 
         Ok(embeddings)
+    }
+
+    async fn unload_model(&self) -> anyhow::Result<()> {
+        // Ollama supports unloading via keep_alive: 0 on any endpoint.
+        // OpenAI cloud doesn't need this (stateless), so we detect Ollama by
+        // checking that the base URL is a local address.
+        let is_local = self.base_url.contains("localhost")
+            || self.base_url.contains("127.0.0.1")
+            || self.base_url.contains("[::1]");
+        if !is_local {
+            return Ok(());
+        }
+
+        let payload = serde_json::json!({
+            "model": self.model,
+            "keep_alive": 0,
+        });
+
+        let res = self
+            .client
+            .post(format!("{}/api/generate", self.base_url))
+            .json(&payload)
+            .send()
+            .await;
+
+        match res {
+            Ok(r) if r.status().is_success() => {
+                tracing::info!("unloaded model '{}' from Ollama", self.model);
+            }
+            Ok(r) => {
+                tracing::warn!(
+                    "Ollama unload returned {}: {}",
+                    r.status(),
+                    r.text().await.unwrap_or_default()
+                );
+            }
+            Err(e) => {
+                tracing::warn!("failed to unload Ollama model: {e}");
+            }
+        }
+
+        Ok(())
     }
 }

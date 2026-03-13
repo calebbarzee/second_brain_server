@@ -171,16 +171,18 @@ parse_review_time() {
 
 build_cron_entries() {
     local cli_bin="$PROJECT_DIR/target/release/sb"
+    # Helper to ensure Ollama is serving (no-op if not using Ollama or already running)
+    local ensure_ollama="(grep -q ollama ${PROJECT_DIR}/.env 2>/dev/null && { pgrep -f 'ollama serve' >/dev/null 2>&1 || ollama serve >/dev/null 2>&1 & sleep 3; } || true)"
 
     CRON_ENTRIES=""
 
     # Ingest job
     CRON_ENTRIES+="$CRON_TAG — periodic ingest + embed\n"
-    CRON_ENTRIES+="*/${INGEST_INTERVAL} * * * * cd ${PROJECT_DIR} && set -a && . ./.env && set +a && ${cli_bin} ingest ${NOTES_DIR} 2>>${LOG_FILE}\n"
+    CRON_ENTRIES+="*/${INGEST_INTERVAL} * * * * cd ${PROJECT_DIR} && set -a && . ./.env && set +a && ${ensure_ollama} && ${cli_bin} ingest ${NOTES_DIR} 2>>${LOG_FILE}\n"
 
     # Nightly review — summarize
     CRON_ENTRIES+="\n$CRON_TAG — nightly summarize\n"
-    CRON_ENTRIES+="${REVIEW_MINUTE} ${REVIEW_HOUR} * * * cd ${PROJECT_DIR} && set -a && . ./.env && set +a && ${cli_bin} skill summarize --period today 2>>${LOG_FILE}\n"
+    CRON_ENTRIES+="${REVIEW_MINUTE} ${REVIEW_HOUR} * * * cd ${PROJECT_DIR} && set -a && . ./.env && set +a && ${ensure_ollama} && ${cli_bin} skill summarize --period today 2>>${LOG_FILE}\n"
 
     # Nightly review — connect-ideas
     CRON_ENTRIES+="$CRON_TAG — nightly connect-ideas\n"

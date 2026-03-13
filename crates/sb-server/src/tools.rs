@@ -589,6 +589,11 @@ impl SecondBrainServer {
             msg.push_str(&format!("\nErrors: {}", stats.errors.join("; ")));
         }
 
+        // Unload embedding model from memory after batch job completes
+        if let Err(e) = self.pipeline.unload_model().await {
+            tracing::warn!("failed to unload embedding model: {e}");
+        }
+
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 

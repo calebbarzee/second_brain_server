@@ -3,7 +3,6 @@ mod tools;
 use anyhow::Result;
 use clap::Parser;
 use rmcp::ServiceExt;
-use sb_embed::{ChunkerConfig, EmbeddingPipeline, OpenAiProvider, TeiProvider};
 use sb_skills::{SkillContext, SkillRegistry, SkillRunner};
 use sb_sync::{FileWatcher, SyncProcessor, WatcherConfig};
 use std::path::PathBuf;
@@ -51,49 +50,19 @@ async fn main() -> Result<()> {
     tracing::info!("connecting to database");
     let db = sb_core::Database::connect(&config.database.url).await?;
 
-    // Set up embedding provider (env vars override config file)
-    let embedding_url =
-        std::env::var("EMBEDDING_URL").unwrap_or_else(|_| config.embedding.url.clone());
-    let embedding_model =
-        std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| config.embedding.model.clone());
-    let embedding_dims: usize = std::env::var("EMBEDDING_DIMS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(config.embedding.dimensions);
-    let embedding_provider =
-        std::env::var("EMBEDDING_PROVIDER").unwrap_or_else(|_| config.embedding.provider.clone());
+    // Resolve embedding config (preset + env var overrides)
+    let embed_cfg = config.embedding.resolve();
 
     tracing::info!(
         "embedding provider: {} at {}, model={}, dims={}",
-        embedding_provider,
-        embedding_url,
-        embedding_model,
-        embedding_dims
+        embed_cfg.provider,
+        embed_cfg.url,
+        embed_cfg.model,
+        embed_cfg.dimensions
     );
 
-    let provider: Arc<dyn sb_embed::EmbeddingProvider> = match embedding_provider.as_str() {
-        "openai" | "ollama" => Arc::new(OpenAiProvider::new(
-            &embedding_url,
-            &embedding_model,
-            embedding_dims,
-            std::env::var("EMBEDDING_API_KEY").ok(),
-        )),
-        _ => Arc::new(TeiProvider::new(
-            &embedding_url,
-            &embedding_model,
-            embedding_dims,
-        )),
-    };
-
-    let chunker_config = ChunkerConfig {
-        max_chunk_chars: config.embedding.max_chunk_chars,
-        ..ChunkerConfig::default()
-    };
-    let pipeline = Arc::new(EmbeddingPipeline::new(
-        provider,
-        config.embedding.batch_size,
-        chunker_config,
-    ));
+    let embedding_dims = embed_cfg.dimensions;
+    let pipeline = Arc::new(sb_embed::make_pipeline(&embed_cfg));
 
     // Ensure HNSW index matches configured dimensions
     if let Err(e) = sb_core::db::embeddings::ensure_vector_index(db.pool(), embedding_dims).await {

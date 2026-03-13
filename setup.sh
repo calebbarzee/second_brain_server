@@ -51,7 +51,7 @@ Checks prerequisites, configures services, builds, and registers the MCP server.
 Options:
   --notes-dir <path>              Notes directory (default: auto-detect or ~/notes)
   --db-password <pass>            PostgreSQL password (default: secondbrain)
-  --embedding-provider <name>     tei | ollama | openai (default: tei)
+  --embedding-provider <name>     ollama | tei | openai (default: ollama)
   --embedding-model <model>       Embedding model name
   --embedding-dims <dims>         Embedding dimensions
   --max-chunk-chars <chars>       Max characters per chunk
@@ -61,7 +61,7 @@ Options:
 Examples:
   ./setup.sh                                         # Interactive mode
   ./setup.sh --notes-dir ~/notes --non-interactive   # Automated
-  ./setup.sh --embedding-provider ollama --embedding-model qwen3-embedding
+  ./setup.sh --embedding-provider tei --embedding-model BAAI/bge-base-en-v1.5
 USAGE
 }
 
@@ -362,6 +362,28 @@ check_sqlx_cli() {
     fi
 }
 
+check_ollama() {
+    if check_cmd ollama; then
+        ok "Ollama found: $(ollama --version 2>/dev/null | head -1)"
+        return 0
+    fi
+    warn "Ollama not found — needed for local embeddings (default provider)"
+    if [[ -n "$PKG_MGR" ]] && confirm "Install Ollama?"; then
+        if [[ "$PKG_MGR" == "brew" ]]; then
+            brew install ollama
+            info "Starting Ollama service..."
+            brew services start ollama 2>/dev/null || true
+        else
+            info "Installing Ollama via official install script..."
+            curl -fsSL https://ollama.com/install.sh | sh
+        fi
+        ok "Ollama installed"
+    else
+        info "Install Ollama for local embeddings: https://ollama.com/download"
+        return 1
+    fi
+}
+
 # ── Auto-detect notes directories ────────────────────────────────────
 
 detect_notes_dirs() {
@@ -434,81 +456,55 @@ configure() {
         prompt DB_PASSWORD "Database password" "secondbrain"
     fi
 
-    # Embedding provider
-    if [[ -n "$OPT_EMBEDDING_PROVIDER" ]]; then
-        EMBED_PROVIDER="$OPT_EMBEDDING_PROVIDER"
+    # Embedding preset
+    if [[ "$INTERACTIVE" == true ]]; then
+        info "Embedding presets (sets model, dimensions, chunk size automatically):"
+        printf "  ${C_BOLD}1)${C_RESET} nomic         — Ollama nomic-embed-text (137M, 768d, fast, recommended)\n"
+        printf "  ${C_BOLD}2)${C_RESET} nomic-moe     — Ollama nomic-embed-text-v2-moe (305M active, 768d, multilingual)\n"
+        printf "  ${C_BOLD}3)${C_RESET} all-minilm    — Ollama all-minilm (33M, 384d, fastest)\n"
+        printf "  ${C_BOLD}4)${C_RESET} qwen3         — Ollama qwen3-embedding (7.6B, 1024d, best quality, slow on CPU)\n"
+        printf "  ${C_BOLD}5)${C_RESET} snowflake     — Ollama snowflake-arctic-embed2 (305M, 768d)\n"
+        printf "  ${C_BOLD}6)${C_RESET} mxbai         — Ollama mxbai-embed-large (335M, 1024d)\n"
+        printf "  ${C_BOLD}7)${C_RESET} openai-small  — OpenAI text-embedding-3-small (1536d, requires API key)\n"
+        printf "  ${C_BOLD}8)${C_RESET} openai-large  — OpenAI text-embedding-3-large (3072d, requires API key)\n"
+        printf "  ${C_BOLD}9)${C_RESET} tei           — Local Docker TEI (BAAI/bge-base-en-v1.5, 768d)\n"
+        local choice
+        prompt choice "Choose preset (1-9)" "1"
+        case "$choice" in
+            1|nomic)        EMBED_PRESET="nomic" ;;
+            2|nomic-moe)    EMBED_PRESET="nomic-moe" ;;
+            3|all-minilm)   EMBED_PRESET="all-minilm" ;;
+            4|qwen3)        EMBED_PRESET="qwen3" ;;
+            5|snowflake)    EMBED_PRESET="snowflake" ;;
+            6|mxbai)        EMBED_PRESET="mxbai" ;;
+            7|openai-small) EMBED_PRESET="openai-small" ;;
+            8|openai-large) EMBED_PRESET="openai-large" ;;
+            9|tei)          EMBED_PRESET="tei" ;;
+            *)              EMBED_PRESET="nomic" ;;
+        esac
     else
-        if [[ "$INTERACTIVE" == true ]]; then
-            info "Embedding provider options:"
-            printf "  ${C_BOLD}1)${C_RESET} tei     — Local Docker (BAAI/bge-base-en-v1.5, quick start, no API key)\n"
-            printf "  ${C_BOLD}2)${C_RESET} ollama  — Local Ollama (if installed, e.g. qwen3-embedding)\n"
-            printf "  ${C_BOLD}3)${C_RESET} openai  — OpenAI cloud (text-embedding-3-small, requires API key)\n"
-            local choice
-            prompt choice "Choose provider (1/2/3)" "1"
-            case "$choice" in
-                1|tei)    EMBED_PROVIDER="tei" ;;
-                2|ollama) EMBED_PROVIDER="ollama" ;;
-                3|openai) EMBED_PROVIDER="openai" ;;
-                *)        EMBED_PROVIDER="tei" ;;
-            esac
-        else
-            EMBED_PROVIDER="tei"
-        fi
+        EMBED_PRESET="${OPT_EMBEDDING_PROVIDER:-nomic}"
     fi
-    ok "Embedding provider: $EMBED_PROVIDER"
+    ok "Embedding preset: $EMBED_PRESET"
 
-    # Provider-specific defaults
-    local default_model default_dims default_url default_chunk
-    case "$EMBED_PROVIDER" in
-        tei)
-            default_model="BAAI/bge-base-en-v1.5"
-            default_dims="768"
-            default_url="http://localhost:8090"
-            default_chunk="1200"
-            ;;
-        ollama)
-            default_model="qwen3-embedding"
-            default_dims="1024"
-            default_url="http://localhost:11434"
-            default_chunk="3000"
-            ;;
-        openai)
-            default_model="text-embedding-3-small"
-            default_dims="1536"
-            default_url="https://api.openai.com/v1"
-            default_chunk="2400"
-            ;;
-        *)
-            default_model="BAAI/bge-base-en-v1.5"
-            default_dims="768"
-            default_url="http://localhost:8090"
-            default_chunk="1200"
-            ;;
+    # Resolve preset defaults
+    case "$EMBED_PRESET" in
+        nomic)        EMBED_PROVIDER="ollama"; EMBED_MODEL="nomic-embed-text"; EMBED_DIMS="768"; EMBED_URL="http://localhost:11434"; MAX_CHUNK="2400" ;;
+        nomic-moe)    EMBED_PROVIDER="ollama"; EMBED_MODEL="nomic-embed-text-v2-moe"; EMBED_DIMS="768"; EMBED_URL="http://localhost:11434"; MAX_CHUNK="1200" ;;
+        all-minilm)   EMBED_PROVIDER="ollama"; EMBED_MODEL="all-minilm"; EMBED_DIMS="384"; EMBED_URL="http://localhost:11434"; MAX_CHUNK="1000" ;;
+        qwen3)        EMBED_PROVIDER="ollama"; EMBED_MODEL="qwen3-embedding"; EMBED_DIMS="1024"; EMBED_URL="http://localhost:11434"; MAX_CHUNK="3000" ;;
+        snowflake)    EMBED_PROVIDER="ollama"; EMBED_MODEL="snowflake-arctic-embed2"; EMBED_DIMS="768"; EMBED_URL="http://localhost:11434"; MAX_CHUNK="2400" ;;
+        mxbai)        EMBED_PROVIDER="ollama"; EMBED_MODEL="mxbai-embed-large"; EMBED_DIMS="1024"; EMBED_URL="http://localhost:11434"; MAX_CHUNK="1200" ;;
+        openai-small) EMBED_PROVIDER="openai"; EMBED_MODEL="text-embedding-3-small"; EMBED_DIMS="1536"; EMBED_URL="https://api.openai.com"; MAX_CHUNK="2400" ;;
+        openai-large) EMBED_PROVIDER="openai"; EMBED_MODEL="text-embedding-3-large"; EMBED_DIMS="3072"; EMBED_URL="https://api.openai.com"; MAX_CHUNK="2400" ;;
+        tei)          EMBED_PROVIDER="tei"; EMBED_MODEL="BAAI/bge-base-en-v1.5"; EMBED_DIMS="768"; EMBED_URL="http://localhost:8090"; MAX_CHUNK="1200" ;;
+        *)            EMBED_PROVIDER="ollama"; EMBED_MODEL="nomic-embed-text"; EMBED_DIMS="768"; EMBED_URL="http://localhost:11434"; MAX_CHUNK="2400" ;;
     esac
 
-    # Embedding model
-    if [[ -n "$OPT_EMBEDDING_MODEL" ]]; then
-        EMBED_MODEL="$OPT_EMBEDDING_MODEL"
-    else
-        prompt EMBED_MODEL "Embedding model" "$default_model"
-    fi
-
-    # Embedding dimensions
-    if [[ -n "$OPT_EMBEDDING_DIMS" ]]; then
-        EMBED_DIMS="$OPT_EMBEDDING_DIMS"
-    else
-        prompt EMBED_DIMS "Embedding dimensions" "$default_dims"
-    fi
-
-    # Embedding URL
-    EMBED_URL="$default_url"
-
-    # Max chunk chars
-    if [[ -n "$OPT_MAX_CHUNK_CHARS" ]]; then
-        MAX_CHUNK="$OPT_MAX_CHUNK_CHARS"
-    else
-        prompt MAX_CHUNK "Max chunk characters" "$default_chunk"
-    fi
+    # Allow overriding individual fields
+    if [[ -n "$OPT_EMBEDDING_MODEL" ]]; then EMBED_MODEL="$OPT_EMBEDDING_MODEL"; fi
+    if [[ -n "$OPT_EMBEDDING_DIMS" ]]; then EMBED_DIMS="$OPT_EMBEDDING_DIMS"; fi
+    if [[ -n "$OPT_MAX_CHUNK_CHARS" ]]; then MAX_CHUNK="$OPT_MAX_CHUNK_CHARS"; fi
 
     # OpenAI API key (if openai provider)
     OPENAI_KEY=""
@@ -609,11 +605,10 @@ paths = [
 ]
 
 [embedding]
-provider = "${EMBED_PROVIDER}"
-url = "${EMBED_URL}"
-model = "${EMBED_MODEL}"
-dimensions = ${EMBED_DIMS}
-batch_size = 32
+# Available presets: nomic, nomic-moe, all-minilm, snowflake, mxbai, qwen3,
+#                    openai-small, openai-large, tei
+preset = "${EMBED_PRESET}"
+batch_size = 16
 EOF
 
     if [[ -n "$OPENAI_KEY" ]]; then
@@ -699,6 +694,26 @@ wait_healthy() {
             sleep 5
         done
         ok "TEI embedding server is healthy"
+    elif [[ "$EMBED_PROVIDER" == "ollama" ]]; then
+        info "Checking Ollama is serving..."
+        retries=15
+        while ! curl -sf http://localhost:11434/api/tags &>/dev/null; do
+            retries=$((retries - 1))
+            if [[ $retries -le 0 ]]; then
+                warn "Ollama is not responding — start it with: ollama serve (or brew services start ollama)"
+                return 0
+            fi
+            sleep 2
+        done
+        ok "Ollama is ready"
+
+        # Ensure the model is pulled
+        if ! ollama list 2>/dev/null | grep -q "$EMBED_MODEL"; then
+            info "Pulling $EMBED_MODEL (this may take a while on first run)..."
+            ollama pull "$EMBED_MODEL" || warn "Failed to pull model — run: ollama pull $EMBED_MODEL"
+        else
+            ok "Model $EMBED_MODEL is available"
+        fi
     fi
 }
 
@@ -841,6 +856,12 @@ run_embedding() {
             info "Once it is up, run: ./target/release/sb embed"
             return 0
         fi
+    elif [[ "$EMBED_PROVIDER" == "ollama" ]]; then
+        if ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
+            warn "Ollama not reachable — skipping embedding"
+            info "Start Ollama and run: ./target/release/sb embed"
+            return 0
+        fi
     fi
 
     cd "$PROJECT_DIR"
@@ -889,7 +910,7 @@ register_mcp() {
     existing="$(claude mcp list 2>/dev/null || true)"
     if echo "$existing" | grep -q "second-brain"; then
         if confirm "second-brain is already registered. Re-register with new settings?" "n"; then
-            claude mcp remove second-brain 2>/dev/null || true
+            claude mcp remove second-brain -s user 2>/dev/null || true
         else
             ok "MCP server already registered"
             return 0
@@ -900,10 +921,7 @@ register_mcp() {
 
     local env_args=(
         -e "DATABASE_URL=${db_url}"
-        -e "EMBEDDING_URL=${EMBED_URL}"
-        -e "EMBEDDING_MODEL=${EMBED_MODEL}"
-        -e "EMBEDDING_DIMS=${EMBED_DIMS}"
-        -e "EMBEDDING_PROVIDER=${EMBED_PROVIDER}"
+        -e "EMBEDDING_PRESET=${EMBED_PRESET}"
         -e "WATCH_PATHS=${NOTES_DIR}"
     )
 
@@ -911,7 +929,7 @@ register_mcp() {
         env_args+=(-e "OPENAI_API_KEY=${OPENAI_KEY}")
     fi
 
-    claude mcp add second-brain "${env_args[@]}" -- "$server_bin"
+    claude mcp add second-brain -s user "${env_args[@]}" -- "$server_bin"
     ok "MCP server registered with Claude Code"
 }
 
@@ -964,6 +982,7 @@ main() {
     check_docker_compose || exit 1
     check_rust || exit 1
     check_curl || exit 1
+    check_ollama || warn "Ollama not available — you can still use TEI or OpenAI for embeddings"
     check_ripgrep
     check_fd
     check_just

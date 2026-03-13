@@ -144,6 +144,11 @@ impl EmbeddingPipeline {
     pub async fn embed_query(&self, text: &str) -> anyhow::Result<Vec<f32>> {
         self.provider.embed(text).await
     }
+
+    /// Unload the embedding model from memory (e.g. free Ollama VRAM/RAM).
+    pub async fn unload_model(&self) -> anyhow::Result<()> {
+        self.provider.unload_model().await
+    }
 }
 
 /// Find notes that have been ingested but don't have complete embeddings.

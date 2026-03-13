@@ -24,4 +24,10 @@ pub trait EmbeddingProvider: Send + Sync {
             .next()
             .ok_or_else(|| anyhow::anyhow!("embed_batch returned empty results"))
     }
+
+    /// Unload the model from memory. Default is a no-op; providers that hold
+    /// a model in a host process (e.g. Ollama) should override this.
+    async fn unload_model(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
 }

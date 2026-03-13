@@ -177,6 +177,9 @@ async fn cmd_ingest(
             "Embedded: {} notes, {} chunks, {} embeddings",
             embed_stats.notes_processed, embed_stats.chunks_created, embed_stats.embeddings_created
         );
+        if let Err(e) = pipeline.unload_model().await {
+            eprintln!("warning: failed to unload model: {e}");
+        }
     }
 
     for err in &stats.errors {
@@ -482,37 +485,17 @@ async fn cmd_embed(db: &sb_core::Database, config: &sb_core::Config) -> Result<(
             eprintln!("  error: {err}");
         }
     }
+    if let Err(e) = pipeline.unload_model().await {
+        eprintln!("warning: failed to unload model: {e}");
+    }
     Ok(())
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
 
 fn make_pipeline(config: &sb_core::Config) -> sb_embed::EmbeddingPipeline {
-    let url =
-        std::env::var("EMBEDDING_URL").unwrap_or_else(|_| config.embedding.url.clone());
-    let model = std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| config.embedding.model.clone());
-    let dims: usize = std::env::var("EMBEDDING_DIMS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(config.embedding.dimensions);
-    let provider_name =
-        std::env::var("EMBEDDING_PROVIDER").unwrap_or_else(|_| config.embedding.provider.clone());
-
-    let provider: Arc<dyn sb_embed::EmbeddingProvider> = match provider_name.as_str() {
-        "openai" | "ollama" => Arc::new(sb_embed::OpenAiProvider::new(
-            &url,
-            &model,
-            dims,
-            std::env::var("EMBEDDING_API_KEY").ok(),
-        )),
-        _ => Arc::new(sb_embed::TeiProvider::new(&url, &model, dims)),
-    };
-
-    let chunker_config = sb_embed::ChunkerConfig {
-        max_chunk_chars: config.embedding.max_chunk_chars,
-        ..sb_embed::ChunkerConfig::default()
-    };
-    sb_embed::EmbeddingPipeline::new(provider, config.embedding.batch_size, chunker_config)
+    let e = config.embedding.resolve();
+    sb_embed::make_pipeline(&e)
 }
 
 fn truncate(s: &str, max: usize) -> String {
