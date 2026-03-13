@@ -161,7 +161,8 @@ async fn cmd_ingest(
         anyhow::bail!("path does not exist: {path}");
     }
 
-    let stats = sb_core::ingest::ingest_directory(db, p).await?;
+    let mapper = sb_core::PathMapper::new(p.to_path_buf());
+    let stats = sb_core::ingest::ingest_directory(db, p, &mapper).await?;
     println!(
         "Ingested: {} new, {} unchanged, {} links, {} errors",
         stats.ingested,

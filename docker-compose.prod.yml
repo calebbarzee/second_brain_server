@@ -52,10 +52,17 @@ services:
       MCP_TRANSPORT: http
       MCP_HOST: 0.0.0.0
       MCP_PORT: "8080"
+      TRACKED_BRANCH: ${TRACKED_BRANCH:-main}
+      WORKTREE_DIR: /data/worktrees
+      GIT_USER_NAME: ${GIT_USER_NAME:-secondbrain}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-user@second-brain.local}
+      AI_GIT_NAME: ${AI_GIT_NAME:-claude-ai}
+      AI_GIT_EMAIL: ${AI_GIT_EMAIL:-ai@second-brain.local}
     ports:
       - "${MCP_PORT:-8080}:8080"
     volumes:
       - ${NOTES_PATH:-./test-notes}:/data/notes
+      - worktrees:/data/worktrees
 
   # Optional: web-based DB admin
   # pgadmin:
@@ -74,3 +81,4 @@ services:
 volumes:
   pgdata:
   ollama-models:
+  worktrees:

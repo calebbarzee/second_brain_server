@@ -183,7 +183,8 @@ impl Skill for ReflectSkill {
                 std::fs::create_dir_all(parent).ok();
             }
             std::fs::write(&note_path, &content)?;
-            sb_core::ingest::ingest_file(&ctx.db, &note_path).await.ok();
+            let mapper = sb_core::PathMapper::new(ctx.notes_root.clone());
+            sb_core::ingest::ingest_file(&ctx.db, &note_path, &mapper).await.ok();
 
             output
                 .notes_created

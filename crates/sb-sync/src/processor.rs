@@ -1,6 +1,7 @@
 use crate::watcher::FileChange;
 use sb_core::db::notes;
 use sb_core::ingest::{self, IngestResult};
+use sb_core::path_map::PathMapper;
 use sb_core::Database;
 use sb_embed::EmbeddingPipeline;
 use std::sync::Arc;
@@ -20,11 +21,16 @@ pub struct SyncStats {
 pub struct SyncProcessor {
     db: Database,
     pipeline: Arc<EmbeddingPipeline>,
+    mapper: PathMapper,
 }
 
 impl SyncProcessor {
-    pub fn new(db: Database, pipeline: Arc<EmbeddingPipeline>) -> Self {
-        Self { db, pipeline }
+    pub fn new(db: Database, pipeline: Arc<EmbeddingPipeline>, mapper: PathMapper) -> Self {
+        Self {
+            db,
+            pipeline,
+            mapper,
+        }
     }
 
     /// Run the processor loop, consuming file changes from the channel.
@@ -60,7 +66,7 @@ impl SyncProcessor {
 
     /// Handle a file creation or modification.
     async fn handle_modified(&self, path: &std::path::Path) -> anyhow::Result<()> {
-        match ingest::ingest_file(&self.db, path).await? {
+        match ingest::ingest_file(&self.db, path, &self.mapper).await? {
             IngestResult::Ingested(info) => {
                 tracing::info!(
                     "ingested '{}' ({} links)",
@@ -94,14 +100,17 @@ impl SyncProcessor {
         Ok(())
     }
 
-    /// Handle a file deletion (soft-delete the note).
+    /// Handle a file deletion (soft-delete the note using canonical path).
     async fn handle_deleted(&self, path: &std::path::Path) -> anyhow::Result<()> {
-        let file_path = path.to_string_lossy().to_string();
-        let deleted = notes::soft_delete_note(self.db.pool(), &file_path).await?;
+        let canonical = self
+            .mapper
+            .to_canonical(path)
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        let deleted = notes::soft_delete_note(self.db.pool(), &canonical).await?;
         if deleted {
-            tracing::info!("soft-deleted note: {}", file_path);
+            tracing::info!("soft-deleted note: {}", canonical);
         } else {
-            tracing::debug!("no note found to delete for: {}", file_path);
+            tracing::debug!("no note found to delete for: {}", canonical);
         }
         Ok(())
     }

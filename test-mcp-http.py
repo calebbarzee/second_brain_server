@@ -308,7 +308,7 @@ def run_tests(
 #  TEST DEFINITIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
-CREATED_NOTE = "/data/notes/_test_integration_note.md"
+CREATED_NOTE = "_test_integration_note.md"
 
 # ── Protocol & Transport ──────────────────────────────────────────────────────
 
@@ -393,11 +393,11 @@ def _(c: McpClient):
         return "missing tools capability"
 
 
-@test("Protocol & Transport", "tools/list returns 15 tools")
+@test("Protocol & Transport", "tools/list returns 17 tools")
 def _(c: McpClient):
     tools = c.list_tools()
-    if len(tools) != 16:
-        return f"expected 15 tools, got {len(tools)}: {tools}"
+    if len(tools) != 17:
+        return f"expected 17 tools, got {len(tools)}: {tools}"
 
 
 @test("Protocol & Transport", "Concurrent sessions are independent")
@@ -419,6 +419,67 @@ def _(c: McpClient):
     r = c2.raw_delete(headers={"Mcp-Session-Id": c2.session_id})
     if r.status_code not in (200, 202, 204, 405):
         return f"expected 200/202/204/405, got {r.status_code}"
+
+
+# ── Ingestion ─────────────────────────────────────────────────────────────────
+
+
+# ── Session Management ─────────────────────────────────────────────────────────
+
+_session_initialized = False
+# Unique branch name per test run to avoid worktree conflicts
+_test_branch = f"testuser/test-{int(time.time())}"
+
+
+def ensure_session(c: McpClient):
+    """Helper: initialize a session if not already done."""
+    global _session_initialized
+    if _session_initialized:
+        return
+    r = c.call_tool(
+        "session_init",
+        {"username": "testuser", "email": "test@example.com", "branch": _test_branch},
+    )
+    if not r.is_error:
+        _session_initialized = True
+
+
+@test("Session Management", "session_init: create session")
+def _(c: McpClient):
+    r = c.call_tool(
+        "session_init",
+        {"username": "testuser", "email": "test@example.com", "branch": _test_branch},
+    )
+    if r.is_error:
+        return f"error: {r.text}"
+    if "testuser" not in r.text:
+        return f"expected username in response: {r.text[:120]}"
+    if "testuser/" not in r.text:
+        return f"expected branch in response: {r.text[:120]}"
+    global _session_initialized
+    _session_initialized = True
+
+
+@test("Session Management", "session_init: already initialized (idempotent)")
+def _(c: McpClient):
+    r = c.call_tool(
+        "session_init",
+        {"username": "testuser", "email": "test@example.com"},
+    )
+    if r.is_error:
+        return f"error: {r.text}"
+    if "already active" not in r.text.lower():
+        return f"expected 'already active': {r.text[:120]}"
+
+
+@test("Session Management", "note_create without session → error", slow=False)
+def _(c: McpClient):
+    # Use a SEPARATE client with no session to verify the guard
+    c2 = McpClient(c.base_url)
+    c2.initialize()
+    r = c2.call_tool("note_create", {"file_path": "nope.md", "content": "# Nope"})
+    if not r.is_error and "session" not in r.text.lower():
+        return f"expected session error, got: {r.text[:120]}"
 
 
 # ── Ingestion ─────────────────────────────────────────────────────────────────
@@ -539,7 +600,7 @@ def _(c: McpClient):
 
 @test("Note Reading", "note_read: valid note")
 def _(c: McpClient):
-    r = c.call_tool("note_read", {"file_path": "/data/notes/TODO.md"})
+    r = c.call_tool("note_read", {"file_path": "TODO.md"})
     if r.is_error:
         return f"error: {r.text}"
     if not r.text:
@@ -549,7 +610,7 @@ def _(c: McpClient):
 @test("Note Reading", "note_read: nonexistent → error")
 def _(c: McpClient):
     r = c.call_tool(
-        "note_read", {"file_path": "/data/notes/this_does_not_exist_xyz.md"}
+        "note_read", {"file_path": "this_does_not_exist_xyz.md"}
     )
     if not r.is_error and "not found" not in r.text.lower():
         return f"expected error, got: {r.text[:80]}"
@@ -567,6 +628,7 @@ def _(c: McpClient):
 
 @test("Note CRUD", "note_create: new note")
 def _(c: McpClient):
+    ensure_session(c)
     content = (
         "# Integration Test Note\n\n"
         "Created by test-mcp-http.py.\n"
@@ -591,6 +653,7 @@ def _(c: McpClient):
 
 @test("Note CRUD", "note_update: modify created note")
 def _(c: McpClient):
+    ensure_session(c)
     content = (
         "# Updated Integration Test\n\n"
         "Updated by test suite.\n"
@@ -605,7 +668,7 @@ def _(c: McpClient):
 def _(c: McpClient):
     r = c.call_tool(
         "note_update",
-        {"file_path": "/data/notes/no_such_note_xyz.md", "content": "# Nope"},
+        {"file_path": "no_such_note_xyz.md", "content": "# Nope"},
     )
     if not r.text:
         return "no response"
@@ -632,6 +695,7 @@ def _(c: McpClient):
 
 @test("Note CRUD", "note_stamp: tag human edit")
 def _(c: McpClient):
+    ensure_session(c)
     r = c.call_tool("note_stamp", {"file_path": CREATED_NOTE, "editor": "calebbarzee"})
     if r.is_error:
         return f"error: {r.text}"
@@ -642,7 +706,7 @@ def _(c: McpClient):
 @test("Note CRUD", "note_stamp: nonexistent file (graceful)")
 def _(c: McpClient):
     r = c.call_tool(
-        "note_stamp", {"file_path": "/data/notes/nope.md", "editor": "someone"}
+        "note_stamp", {"file_path": "nope.md", "editor": "someone"}
     )
     if not r.is_error and "not found" not in r.text.lower():
         return f"expected error: {r.text[:80]}"
@@ -662,7 +726,7 @@ def _(c: McpClient):
 
 @test("Link Graph", "note_graph: nonexistent note (graceful)")
 def _(c: McpClient):
-    r = c.call_tool("note_graph", {"file_path": "/data/notes/nope_nope.md"})
+    r = c.call_tool("note_graph", {"file_path": "nope_nope.md"})
     if not r.text:
         return "no response"
 
@@ -705,7 +769,7 @@ def _(c: McpClient):
 
 @test("Embeddings & Semantic Search", "find_related: by file path", slow=True)
 def _(c: McpClient):
-    r = c.call_tool("find_related", {"file_path": "/data/notes/TODO.md", "limit": 3})
+    r = c.call_tool("find_related", {"file_path": "TODO.md", "limit": 3})
     if r.is_error:
         return f"error: {r.text}"
 
@@ -820,9 +884,13 @@ def _(c: McpClient):
 
 
 def cleanup(created_note: str):
-    """Remove the test note from the container."""
+    """Remove the test note from the container (check both main repo and worktrees)."""
     subprocess.run(
-        ["docker", "exec", "secondbrain-app", "rm", "-f", created_note],
+        [
+            "docker", "exec", "secondbrain-app", "bash", "-c",
+            f"find /data -name '{created_note}' -delete 2>/dev/null; "
+            f"git -C /data/notes worktree prune 2>/dev/null; true"
+        ],
         capture_output=True,
     )
 

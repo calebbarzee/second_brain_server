@@ -29,6 +29,18 @@ if [ -d "${WATCH_PATHS}" ] && ! git -C "${WATCH_PATHS}" rev-parse --git-dir >/de
     git -C "${WATCH_PATHS}" add -A
     git -C "${WATCH_PATHS}" commit -m "initial notes import" --allow-empty
 fi
+# Checkout the tracked branch (for the shared DB index)
+tracked_branch="${TRACKED_BRANCH:-main}"
+current_branch=$(git -C "${WATCH_PATHS}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+if [ -n "$current_branch" ] && [ "$current_branch" != "$tracked_branch" ]; then
+    echo "Checking out tracked branch: ${tracked_branch}"
+    git -C "${WATCH_PATHS}" checkout "$tracked_branch" 2>/dev/null || \
+        git -C "${WATCH_PATHS}" checkout -b "$tracked_branch" 2>/dev/null || true
+fi
+# Create worktree directory
+mkdir -p "${WORKTREE_DIR:-/data/worktrees}"
+# Mark worktree dir as safe for git
+git config --global --add safe.directory "*" 2>/dev/null || true
 
 # ── Generate config from environment ─────────────────────
 # Always regenerate so config stays in sync with env vars.
@@ -39,6 +51,8 @@ url = "${DATABASE_URL}"
 
 [notes]
 paths = ["${WATCH_PATHS}"]
+tracked_branch = "${TRACKED_BRANCH:-main}"
+worktree_dir = "${WORKTREE_DIR:-/data/worktrees}"
 
 [embedding]
 preset = "${EMBEDDING_PRESET:-nomic}"

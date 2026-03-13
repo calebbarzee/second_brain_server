@@ -4,6 +4,7 @@ pub mod links;
 pub mod notes;
 pub mod projects;
 pub mod queries;
+pub mod settings;
 pub mod skill_runs;
 pub mod sync_state;
 pub mod tags;

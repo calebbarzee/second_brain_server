@@ -3,9 +3,11 @@ mod tools;
 use anyhow::Result;
 use clap::Parser;
 use rmcp::ServiceExt;
+use sb_core::path_map::PathMapper;
+use sb_core::worktree::WorktreeConfig;
 use sb_skills::{SkillContext, SkillRegistry, SkillRunner};
 use sb_sync::{FileWatcher, SyncProcessor, WatcherConfig};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
@@ -119,6 +121,51 @@ async fn main() -> Result<()> {
         .cloned()
         .unwrap_or_else(dirs_or_default);
 
+    // Create the PathMapper for the main repo
+    let main_mapper = PathMapper::new(notes_root.clone());
+
+    // Run one-time migration to canonical (relative) paths
+    if let Err(e) = sb_core::db::settings::migrate_to_canonical_paths(
+        db.pool(),
+        &notes_root.to_string_lossy(),
+    )
+    .await
+    {
+        tracing::warn!("canonical path migration failed (non-fatal): {e}");
+    }
+
+    // Resolve tracked branch
+    let tracked_branch = config
+        .notes
+        .tracked_branch
+        .clone()
+        .or_else(|| std::env::var("TRACKED_BRANCH").ok())
+        .unwrap_or_else(|| "main".to_string());
+
+    // Build worktree config (used by HTTP transport for multi-user)
+    let worktree_dir = config
+        .notes
+        .worktree_dir
+        .clone()
+        .or_else(|| std::env::var("WORKTREE_DIR").ok().map(PathBuf::from))
+        .unwrap_or_else(|| {
+            notes_root
+                .parent()
+                .unwrap_or(Path::new("/data"))
+                .join("worktrees")
+        });
+
+    let worktree_config = WorktreeConfig {
+        main_repo: notes_root.clone(),
+        worktree_dir,
+        tracked_branch: tracked_branch.clone(),
+    };
+
+    // Prune stale worktrees from previous crashes
+    if let Err(e) = sb_core::worktree::prune_worktrees(&worktree_config) {
+        tracing::warn!("worktree prune failed (non-fatal): {e}");
+    }
+
     // Set up skill engine
     let skill_ctx = Arc::new(SkillContext::new(
         db.clone(),
@@ -143,7 +190,7 @@ async fn main() -> Result<()> {
         }
 
         let (watcher, rx) = FileWatcher::start(watch_paths.clone(), WatcherConfig::default())?;
-        let processor = SyncProcessor::new(db.clone(), pipeline.clone());
+        let processor = SyncProcessor::new(db.clone(), pipeline.clone(), main_mapper.clone());
 
         tokio::spawn(async move {
             processor.run(rx).await;
@@ -153,10 +200,24 @@ async fn main() -> Result<()> {
         tracing::info!("no watch paths configured — file watcher disabled");
     }
 
+    tracing::info!("tracked branch: {tracked_branch}");
+
     match cli.transport {
-        Transport::Stdio => run_stdio(db, pipeline, skill_runner, watch_paths).await,
+        Transport::Stdio => {
+            run_stdio(db, pipeline, skill_runner, watch_paths, main_mapper).await
+        }
         Transport::Http => {
-            run_http(db, pipeline, skill_runner, watch_paths, &cli.host, cli.port).await
+            run_http(
+                db,
+                pipeline,
+                skill_runner,
+                watch_paths,
+                Some(worktree_config),
+                main_mapper,
+                &cli.host,
+                cli.port,
+            )
+            .await
         }
     }
 }
@@ -167,10 +228,18 @@ async fn run_stdio(
     pipeline: Arc<sb_embed::EmbeddingPipeline>,
     skill_runner: Arc<SkillRunner>,
     watch_paths: Vec<PathBuf>,
+    main_mapper: PathMapper,
 ) -> Result<()> {
-    tracing::info!("starting MCP server on stdio (16 tools)");
+    tracing::info!("starting MCP server on stdio (17 tools)");
 
-    let server = tools::SecondBrainServer::new(db, pipeline, skill_runner, watch_paths);
+    let server = tools::SecondBrainServer::new(
+        db,
+        pipeline,
+        skill_runner,
+        watch_paths,
+        None, // no worktree support in stdio mode
+        main_mapper,
+    );
     let service = server
         .serve(rmcp::transport::stdio())
         .await
@@ -189,6 +258,8 @@ async fn run_http(
     pipeline: Arc<sb_embed::EmbeddingPipeline>,
     skill_runner: Arc<SkillRunner>,
     watch_paths: Vec<PathBuf>,
+    worktree_config: Option<WorktreeConfig>,
+    main_mapper: PathMapper,
     host: &str,
     port: u16,
 ) -> Result<()> {
@@ -207,6 +278,8 @@ async fn run_http(
                 pipeline.clone(),
                 skill_runner.clone(),
                 watch_paths.clone(),
+                worktree_config.clone(),
+                main_mapper.clone(),
             ))
         },
         session_manager,
@@ -224,7 +297,7 @@ async fn run_http(
     let bind_addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
 
-    tracing::info!("MCP server listening on http://{bind_addr}/mcp (16 tools)");
+    tracing::info!("MCP server listening on http://{bind_addr}/mcp (17 tools)");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {

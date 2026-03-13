@@ -1,5 +1,6 @@
 use crate::db::{links, notes, sync_state};
 use crate::models::CreateNote;
+use crate::path_map::PathMapper;
 use crate::{markdown, Database};
 use std::path::Path;
 
@@ -21,21 +22,32 @@ pub struct IngestInfo {
 }
 
 /// Ingest a single markdown file: parse, upsert to DB, extract links, update sync state.
-/// Returns `Ingested` if the file was new or changed, `Skipped` if unchanged.
-pub async fn ingest_file(db: &Database, path: &Path) -> anyhow::Result<IngestResult> {
+///
+/// The `mapper` converts the absolute `path` to a canonical (repo-relative) path
+/// for storage in the DB. This allows the same note to be referenced from
+/// different worktrees.
+pub async fn ingest_file(
+    db: &Database,
+    path: &Path,
+    mapper: &PathMapper,
+) -> anyhow::Result<IngestResult> {
     let raw = std::fs::read_to_string(path)?;
-    let file_path = path.to_string_lossy().to_string();
+    let canonical = mapper.to_canonical(path).unwrap_or_else(|| {
+        // Fallback: use the raw path if it's not under the mapper root.
+        // This handles edge cases like ingesting from outside the repo.
+        path.to_string_lossy().to_string()
+    });
     let hash = markdown::content_hash(&raw);
 
     // Skip if content hasn't changed
-    if !notes::note_content_changed(db.pool(), &file_path, &hash).await? {
+    if !notes::note_content_changed(db.pool(), &canonical, &hash).await? {
         return Ok(IngestResult::Skipped);
     }
 
     let parsed = markdown::parse_markdown(&raw);
 
     let note = CreateNote {
-        file_path: file_path.clone(),
+        file_path: canonical.clone(),
         title: parsed.title.clone(),
         content_hash: hash.clone(),
         raw_content: raw,
@@ -44,12 +56,12 @@ pub async fn ingest_file(db: &Database, path: &Path) -> anyhow::Result<IngestRes
 
     let db_note = notes::upsert_note(db.pool(), &note).await?;
 
-    // Extract and store links
+    // Extract and store links (using canonical source path for resolution)
     let link_data: Vec<(String, String, Option<String>)> = parsed
         .links
         .iter()
         .map(|l| {
-            let resolved = resolve_link_path(&file_path, &l.target, l.is_wikilink);
+            let resolved = resolve_link_path(&canonical, &l.target, l.is_wikilink);
             (l.link_text.clone(), resolved, None)
         })
         .collect();
@@ -57,21 +69,25 @@ pub async fn ingest_file(db: &Database, path: &Path) -> anyhow::Result<IngestRes
     let links_stored = links::replace_links_for_note(db.pool(), db_note.id, &link_data).await?;
 
     // Resolve any dangling links that point to this note
-    links::resolve_links_to_path(db.pool(), &file_path, db_note.id).await?;
+    links::resolve_links_to_path(db.pool(), &canonical, db_note.id).await?;
 
     // Update sync state
     sync_state::upsert_sync_state(db.pool(), db_note.id, &hash, "file_to_db").await?;
 
     Ok(IngestResult::Ingested(IngestInfo {
         note_id: db_note.id,
-        file_path,
+        file_path: canonical,
         title: parsed.title,
         links_stored,
     }))
 }
 
 /// Ingest all markdown files in a directory recursively.
-pub async fn ingest_directory(db: &Database, dir: &Path) -> anyhow::Result<IngestStats> {
+pub async fn ingest_directory(
+    db: &Database,
+    dir: &Path,
+    mapper: &PathMapper,
+) -> anyhow::Result<IngestStats> {
     let mut stats = IngestStats::default();
 
     let files: Vec<_> = walkdir::WalkDir::new(dir)
@@ -82,7 +98,7 @@ pub async fn ingest_directory(db: &Database, dir: &Path) -> anyhow::Result<Inges
         .collect();
 
     for file_path in &files {
-        match ingest_file(db, file_path).await {
+        match ingest_file(db, file_path, mapper).await {
             Ok(IngestResult::Ingested(info)) => {
                 stats.ingested += 1;
                 stats.links_stored += info.links_stored;
@@ -109,12 +125,15 @@ pub struct IngestStats {
     pub ingested_note_ids: Vec<uuid::Uuid>,
 }
 
-/// Resolve a link target to an absolute-ish file path.
+/// Resolve a link target to a canonical file path.
 /// For wikilinks: search by note name (append .md if needed).
 /// For relative paths: resolve relative to the source note's directory.
-fn resolve_link_path(source_file_path: &str, target: &str, is_wikilink: bool) -> String {
+fn resolve_link_path(source_canonical_path: &str, target: &str, is_wikilink: bool) -> String {
     // Skip external URLs
-    if target.starts_with("http://") || target.starts_with("https://") || target.starts_with('#') {
+    if target.starts_with("http://")
+        || target.starts_with("https://")
+        || target.starts_with('#')
+    {
         return target.to_string();
     }
 
@@ -128,11 +147,10 @@ fn resolve_link_path(source_file_path: &str, target: &str, is_wikilink: bool) ->
         }
     } else {
         // Relative path: resolve relative to source note's directory
-        let source_dir = Path::new(source_file_path)
+        let source_dir = Path::new(source_canonical_path)
             .parent()
             .unwrap_or(Path::new(""));
         let resolved = source_dir.join(target);
-        // Normalize the path (remove ./ and ../)
         normalize_path(&resolved)
     }
 }
@@ -142,9 +160,9 @@ fn normalize_path(path: &Path) -> String {
     let mut components = Vec::new();
     for component in path.components() {
         match component {
-            std::path::Component::CurDir => {} // skip `.`
+            std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
-                components.pop(); // go up one level
+                components.pop();
             }
             other => components.push(other),
         }
@@ -159,37 +177,37 @@ mod tests {
 
     #[test]
     fn test_resolve_wikilink() {
-        let result = resolve_link_path("/notes/foo.md", "some note", true);
+        let result = resolve_link_path("sub/foo.md", "some note", true);
         assert_eq!(result, "some note.md");
     }
 
     #[test]
     fn test_resolve_wikilink_with_md() {
-        let result = resolve_link_path("/notes/foo.md", "some note.md", true);
+        let result = resolve_link_path("sub/foo.md", "some note.md", true);
         assert_eq!(result, "some note.md");
     }
 
     #[test]
     fn test_resolve_relative_path() {
-        let result = resolve_link_path("/home/user/notes/foo.md", "./bar.md", false);
-        assert_eq!(result, "/home/user/notes/bar.md");
+        let result = resolve_link_path("notes/foo.md", "./bar.md", false);
+        assert_eq!(result, "notes/bar.md");
     }
 
     #[test]
     fn test_resolve_relative_parent() {
-        let result = resolve_link_path("/home/user/notes/sub/foo.md", "../bar.md", false);
-        assert_eq!(result, "/home/user/notes/bar.md");
+        let result = resolve_link_path("notes/sub/foo.md", "../bar.md", false);
+        assert_eq!(result, "notes/bar.md");
     }
 
     #[test]
     fn test_resolve_external_url() {
-        let result = resolve_link_path("/notes/foo.md", "https://example.com", false);
+        let result = resolve_link_path("foo.md", "https://example.com", false);
         assert_eq!(result, "https://example.com");
     }
 
     #[test]
     fn test_resolve_anchor() {
-        let result = resolve_link_path("/notes/foo.md", "#section", false);
+        let result = resolve_link_path("foo.md", "#section", false);
         assert_eq!(result, "#section");
     }
 }

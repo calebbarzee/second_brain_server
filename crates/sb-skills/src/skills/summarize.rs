@@ -162,7 +162,8 @@ impl Skill for SummarizeSkill {
             std::fs::write(&note_path, &content)?;
 
             // Ingest the new note
-            sb_core::ingest::ingest_file(&ctx.db, &note_path).await.ok();
+            let mapper = sb_core::PathMapper::new(ctx.notes_root.clone());
+            sb_core::ingest::ingest_file(&ctx.db, &note_path, &mapper).await.ok();
 
             output
                 .notes_created

@@ -6,10 +6,13 @@ use rmcp::{
 };
 use sb_core::Database;
 use sb_core::ingest::{self, IngestResult};
+use sb_core::path_map::PathMapper;
+use sb_core::worktree::{SessionInfo, WorktreeConfig};
 use sb_embed::EmbeddingPipeline;
 use sb_skills::SkillRunner;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 // ── Tool parameter types ───────────────────────────────────────
 
@@ -181,6 +184,17 @@ pub struct NoteStampParams {
     pub editor: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SessionInitParams {
+    /// Your username (e.g. "calebbarzee"). Used for branch prefix and edit attribution.
+    pub username: String,
+    /// Your email address (for git commits)
+    pub email: String,
+    /// Branch name to work on (default: "<username>/working"). Must be prefixed with your username.
+    #[serde(default)]
+    pub branch: Option<String>,
+}
+
 fn default_search_mode() -> Option<String> {
     Some("content".to_string())
 }
@@ -204,6 +218,12 @@ pub struct SecondBrainServer {
     pipeline: Arc<EmbeddingPipeline>,
     skill_runner: Arc<SkillRunner>,
     notes_paths: Vec<std::path::PathBuf>,
+    /// Per-session worktree state. Set by session_init, None until then.
+    session: Arc<Mutex<Option<SessionInfo>>>,
+    /// Worktree configuration (None in stdio mode).
+    worktree_config: Option<WorktreeConfig>,
+    /// PathMapper for the main repo (used for read-only operations and fallback).
+    main_mapper: PathMapper,
 }
 
 #[tool_router]
@@ -213,6 +233,8 @@ impl SecondBrainServer {
         pipeline: Arc<EmbeddingPipeline>,
         skill_runner: Arc<SkillRunner>,
         notes_paths: Vec<std::path::PathBuf>,
+        worktree_config: Option<WorktreeConfig>,
+        main_mapper: PathMapper,
     ) -> Self {
         Self {
             tool_router: Self::tool_router(),
@@ -220,6 +242,9 @@ impl SecondBrainServer {
             pipeline,
             skill_runner,
             notes_paths,
+            session: Arc::new(Mutex::new(None)),
+            worktree_config,
+            main_mapper,
         }
     }
 
@@ -382,9 +407,10 @@ impl SecondBrainServer {
             ))]));
         }
 
+        let mapper = self.active_mapper();
         let stats = if path.is_file() {
             let mut stats = ingest::IngestStats::default();
-            match ingest::ingest_file(&self.db, path).await {
+            match ingest::ingest_file(&self.db, path, &mapper).await {
                 Ok(IngestResult::Ingested(info)) => {
                     stats.ingested = 1;
                     stats.links_stored = info.links_stored;
@@ -399,7 +425,7 @@ impl SecondBrainServer {
             }
             stats
         } else {
-            ingest::ingest_directory(&self.db, path)
+            ingest::ingest_directory(&self.db, path, &mapper)
                 .await
                 .map_err(|e| McpError::internal_error(format!("ingest failed: {e}"), None))?
         };
@@ -614,13 +640,16 @@ impl SecondBrainServer {
         &self,
         Parameters(params): Parameters<NoteCreateParams>,
     ) -> Result<CallToolResult, McpError> {
-        let path = Path::new(&params.file_path);
-
         if !params.file_path.ends_with(".md") {
             return Ok(CallToolResult::error(vec![Content::text(
                 "File path must end with .md",
             )]));
         }
+
+        let session = self.require_session()?;
+        let mapper = self.active_mapper();
+        let path = mapper.to_absolute(&params.file_path);
+        let path = path.as_path();
 
         if path.exists() {
             return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -646,7 +675,7 @@ impl SecondBrainServer {
             &format!("[second-brain] create: {}", params.file_path),
         );
 
-        match ingest::ingest_file(&self.db, path).await {
+        match ingest::ingest_file(&self.db, path, &mapper).await {
             Ok(IngestResult::Ingested(info)) => {
                 let mut msg = format!(
                     "Created note '{}' at {}\nLinks stored: {}",
@@ -670,7 +699,10 @@ impl SecondBrainServer {
                     }
                 }
 
-                msg.push_str("\nFrontmatter: edited_by=ai tag added");
+                msg.push_str(&format!(
+                    "\nFrontmatter: edited_by=ai tag added\nBranch: {}",
+                    session.branch
+                ));
                 if let Some((branch, sha)) = git_msg {
                     msg.push_str(&format!("\nGit: committed to {branch} ({sha})"));
                 }
@@ -693,7 +725,10 @@ impl SecondBrainServer {
         &self,
         Parameters(params): Parameters<NoteUpdateParams>,
     ) -> Result<CallToolResult, McpError> {
-        let path = Path::new(&params.file_path);
+        let _session = self.require_session()?;
+        let mapper = self.active_mapper();
+        let path = mapper.to_absolute(&params.file_path);
+        let path = path.as_path();
 
         if !path.exists() {
             return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -721,7 +756,7 @@ impl SecondBrainServer {
             &format!("[second-brain] update: {}", params.file_path),
         );
 
-        match ingest::ingest_file(&self.db, path).await {
+        match ingest::ingest_file(&self.db, path, &mapper).await {
             Ok(IngestResult::Ingested(info)) => {
                 let mut msg = format!(
                     "Updated note '{}' at {}\nLinks stored: {}",
@@ -1011,11 +1046,11 @@ impl SecondBrainServer {
         let limit = params.limit.unwrap_or(20) as usize;
         let mode = params.mode.as_deref().unwrap_or("content");
 
-        // Use provided paths, or fall back to configured notes paths
+        // Use provided paths, or fall back to active mapper root
         let search_dirs: Vec<std::path::PathBuf> = if let Some(paths) = &params.paths {
             paths.iter().map(std::path::PathBuf::from).collect()
         } else {
-            self.notes_paths.clone()
+            vec![self.active_mapper().root().to_path_buf()]
         };
 
         if search_dirs.is_empty() {
@@ -1069,6 +1104,7 @@ impl SecondBrainServer {
         &self,
         Parameters(params): Parameters<NoteClassifyParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _session = self.require_session()?;
         let lifecycle =
             sb_core::lifecycle::Lifecycle::from_str(&params.lifecycle).ok_or_else(|| {
                 McpError::invalid_params(
@@ -1146,7 +1182,10 @@ impl SecondBrainServer {
         &self,
         Parameters(params): Parameters<NoteStampParams>,
     ) -> Result<CallToolResult, McpError> {
-        let path = Path::new(&params.file_path);
+        let _session = self.require_session()?;
+        let mapper = self.active_mapper();
+        let path = mapper.to_absolute(&params.file_path);
+        let path = path.as_path();
 
         if !path.exists() {
             return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -1164,7 +1203,7 @@ impl SecondBrainServer {
             .map_err(|e| McpError::internal_error(format!("write failed: {e}"), None))?;
 
         // Re-ingest so the DB reflects the updated frontmatter
-        if let Err(e) = ingest::ingest_file(&self.db, path).await {
+        if let Err(e) = ingest::ingest_file(&self.db, path, &self.active_mapper()).await {
             tracing::warn!("re-ingest after stamp failed: {e}");
         }
 
@@ -1172,6 +1211,57 @@ impl SecondBrainServer {
             "Stamped '{}' with edited_by={}, last_{}_edit=<now>",
             params.file_path, params.editor, params.editor
         ))]))
+    }
+
+    #[tool(
+        description = "Initialize your editing session with an isolated git worktree. Must be called before using write tools (note_create, note_update, note_stamp). Read-only tools (search, list, read) work without a session. Creates or checks out a branch named '<username>/working' by default."
+    )]
+    async fn session_init(
+        &self,
+        Parameters(params): Parameters<SessionInitParams>,
+    ) -> Result<CallToolResult, McpError> {
+        // Check if session already active
+        {
+            let session = self.session.lock().unwrap();
+            if let Some(existing) = session.as_ref() {
+                return Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Session already active:\n  User: {} <{}>\n  Branch: {}\n  Worktree: {}",
+                    existing.username, existing.email, existing.branch,
+                    existing.worktree_path.display()
+                ))]));
+            }
+        }
+
+        let config = self.worktree_config.as_ref().ok_or_else(|| {
+            McpError::internal_error(
+                "Worktree support not available (stdio mode or not configured).",
+                None,
+            )
+        })?;
+
+        let session_id = format!(
+            "{}-{}",
+            params.username,
+            uuid::Uuid::new_v4().as_simple()
+        );
+
+        let info = sb_core::worktree::create_worktree(
+            config,
+            &session_id,
+            &params.username,
+            &params.email,
+            params.branch.as_deref(),
+        )
+        .map_err(|e| McpError::internal_error(format!("worktree creation failed: {e}"), None))?;
+
+        let msg = format!(
+            "Session initialized:\n  User: {} <{}>\n  Branch: {}\n  Worktree: {}\n\nWrite tools (note_create, note_update, note_stamp) are now enabled.",
+            info.username, info.email, info.branch, info.worktree_path.display()
+        );
+
+        *self.session.lock().unwrap() = Some(info);
+
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 }
 
@@ -1201,41 +1291,51 @@ const DEFAULT_AI_NAME: &str = "claude-ai";
 const DEFAULT_AI_EMAIL: &str = "ai@second-brain.local";
 
 impl SecondBrainServer {
-    /// Commit a single AI-authored file to the user's current branch.
-    ///
-    /// # Branch model
-    /// The user must already be on their working branch (e.g. `calebbarzee/weekly`).
-    /// The AI commits to that same branch with its own author identity so
-    /// human vs AI changes are visible in `git log`.
-    ///
-    /// Protected branches (main, master, staging, dev) are rejected.
-    /// The branch must be prefixed with the repo owner's git username.
-    ///
-    /// # Returns
-    /// `Some((branch, sha))` on success, `None` if git is unavailable or
-    /// the branch is invalid (with a warning logged).
-    fn git_commit_file(&self, file_path: &Path, message: &str) -> Option<(String, String)> {
-        let notes_root = self.notes_paths.first()?;
-        if !sb_skills::git_ops::is_git_repo(notes_root) {
-            return None;
+    /// Returns the PathMapper for the active context:
+    /// session worktree if initialized, main repo otherwise.
+    fn active_mapper(&self) -> PathMapper {
+        let session = self.session.lock().unwrap();
+        match session.as_ref() {
+            Some(info) => PathMapper::new(info.worktree_path.clone()),
+            None => self.main_mapper.clone(),
         }
+    }
 
-        // The repo owner is the git user.name configured in the notes repo
-        let repo_owner = match sb_skills::git_ops::git_username(notes_root) {
-            Ok(name) => name,
-            Err(e) => {
-                tracing::warn!("git config user.name not set, skipping commit: {e}");
-                return None;
+    /// Returns session info or an error for tools that require an active session.
+    fn require_session(&self) -> Result<SessionInfo, McpError> {
+        let session = self.session.lock().unwrap();
+        session.clone().ok_or_else(|| {
+            McpError::invalid_params(
+                "No active session. Call session_init first with your username and email.",
+                None,
+            )
+        })
+    }
+
+    /// Commit a single AI-authored file to the session's branch.
+    fn git_commit_file(&self, file_path: &Path, message: &str) -> Option<(String, String)> {
+        let session = self.session.lock().unwrap();
+
+        let (notes_root, repo_owner) = match session.as_ref() {
+            Some(info) => (info.worktree_path.clone(), info.username.clone()),
+            None => {
+                let root = self.notes_paths.first()?.clone();
+                let owner = sb_skills::git_ops::git_username(&root).ok()?;
+                (root, owner)
             }
         };
 
-        let ai_name = std::env::var("AI_GIT_NAME")
-            .unwrap_or_else(|_| DEFAULT_AI_NAME.to_string());
-        let ai_email = std::env::var("AI_GIT_EMAIL")
-            .unwrap_or_else(|_| DEFAULT_AI_EMAIL.to_string());
+        if !sb_skills::git_ops::is_git_repo(&notes_root) {
+            return None;
+        }
+
+        let ai_name =
+            std::env::var("AI_GIT_NAME").unwrap_or_else(|_| DEFAULT_AI_NAME.to_string());
+        let ai_email =
+            std::env::var("AI_GIT_EMAIL").unwrap_or_else(|_| DEFAULT_AI_EMAIL.to_string());
 
         match sb_skills::git_ops::commit_file(
-            notes_root,
+            &notes_root,
             file_path,
             message,
             &repo_owner,
@@ -1246,6 +1346,25 @@ impl SecondBrainServer {
             Err(e) => {
                 tracing::warn!("git commit skipped: {e}");
                 None
+            }
+        }
+    }
+}
+
+impl Drop for SecondBrainServer {
+    fn drop(&mut self) {
+        // Only clean up if we're the last holder of the session Arc
+        if Arc::strong_count(&self.session) == 1 {
+            if let Some(config) = &self.worktree_config {
+                let session = self.session.lock().unwrap();
+                if let Some(info) = session.as_ref() {
+                    tracing::info!("cleaning up worktree for session {}", info.session_id);
+                    if let Err(e) =
+                        sb_core::worktree::remove_worktree(config, &info.session_id)
+                    {
+                        tracing::error!("worktree cleanup failed: {e}");
+                    }
+                }
             }
         }
     }

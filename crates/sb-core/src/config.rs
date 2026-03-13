@@ -54,6 +54,14 @@ pub struct DatabaseConfig {
 pub struct NotesConfig {
     /// Directories to watch for markdown notes
     pub paths: Vec<PathBuf>,
+    /// Git branch tracked by the shared DB index (default: "main").
+    /// Override via TRACKED_BRANCH env var.
+    #[serde(default)]
+    pub tracked_branch: Option<String>,
+    /// Directory for session worktrees (default: sibling of notes path).
+    /// Override via WORKTREE_DIR env var.
+    #[serde(default)]
+    pub worktree_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -269,7 +277,11 @@ impl Config {
 
         Ok(Self {
             database: DatabaseConfig { url: database_url },
-            notes: NotesConfig { paths: vec![] },
+            notes: NotesConfig {
+                paths: vec![],
+                tracked_branch: None,
+                worktree_dir: None,
+            },
             embedding: EmbeddingConfig::default(),
             projects: vec![],
             llm: None,
