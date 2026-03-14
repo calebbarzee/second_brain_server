@@ -3,15 +3,14 @@ pub mod embeddings;
 pub mod links;
 pub mod notes;
 pub mod projects;
-pub mod queries;
 pub mod settings;
 pub mod skill_runs;
 pub mod sync_state;
 pub mod tags;
 pub mod tasks;
 
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 
 /// Shared database handle wrapping a connection pool.
 #[derive(Debug, Clone)]

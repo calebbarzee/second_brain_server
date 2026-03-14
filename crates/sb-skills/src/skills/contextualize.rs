@@ -32,9 +32,7 @@ impl Skill for ContextualizeSkill {
         ctx: &SkillContext,
         params: &SkillParams,
     ) -> anyhow::Result<SkillOutput> {
-        let period = time_period::parse_period(
-            params.period.as_deref().unwrap_or("this-week"),
-        )?;
+        let period = time_period::parse_period(params.period.as_deref().unwrap_or("this-week"))?;
 
         let project = if let Some(proj_name) = &params.project {
             ctx.resolve_project(proj_name).await?
@@ -67,35 +65,32 @@ impl Skill for ContextualizeSkill {
             );
 
             // 1. Project detection (pass known project names for fuzzy matching)
-            let known_project_names: Vec<String> = projects::list_projects_with_counts(ctx.db.pool())
-                .await
-                .unwrap_or_default()
-                .iter()
-                .map(|p| p.project_name.clone())
-                .collect();
-            let detected = project_detect::detect_project(&note.file_path, &[], &known_project_names);
-            if let Some(det) = &detected {
-                if note.source_project.is_none() {
-                    changes.insert(
-                        "project_suggestion".to_string(),
-                        serde_json::json!({
-                            "name": det.name,
-                            "confidence": format!("{:?}", det.confidence),
-                        }),
-                    );
+            let known_project_names: Vec<String> =
+                projects::list_projects_with_counts(ctx.db.pool())
+                    .await
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|p| p.project_name.clone())
+                    .collect();
+            let detected =
+                project_detect::detect_project(&note.file_path, &[], &known_project_names);
+            if let Some(det) = &detected
+                && note.source_project.is_none()
+            {
+                changes.insert(
+                    "project_suggestion".to_string(),
+                    serde_json::json!({
+                        "name": det.name,
+                        "confidence": format!("{:?}", det.confidence),
+                    }),
+                );
 
-                    // Apply if not dry_run
-                    if !params.dry_run {
-                        let proj = projects::upsert_project(
-                            ctx.db.pool(),
-                            &det.name,
-                            &note.file_path,
-                            None,
-                        )
-                        .await?;
-                        projects::associate_note_project(ctx.db.pool(), note.id, proj.id)
+                // Apply if not dry_run
+                if !params.dry_run {
+                    let proj =
+                        projects::upsert_project(ctx.db.pool(), &det.name, &note.file_path, None)
                             .await?;
-                    }
+                    projects::associate_note_project(ctx.db.pool(), note.id, proj.id).await?;
                 }
             }
 
@@ -112,18 +107,13 @@ impl Skill for ContextualizeSkill {
                 );
 
                 if !params.dry_run {
-                    notes::update_lifecycle(
-                        ctx.db.pool(),
-                        note.id,
-                        suggested_lifecycle.as_str(),
-                    )
-                    .await?;
+                    notes::update_lifecycle(ctx.db.pool(), note.id, suggested_lifecycle.as_str())
+                        .await?;
                 }
             }
 
             // 3. Find unlinked related notes (potential link suggestions)
-            let related =
-                embeddings::find_related_notes(ctx.db.pool(), note.id, 5).await?;
+            let related = embeddings::find_related_notes(ctx.db.pool(), note.id, 5).await?;
             let link_suggestions: Vec<_> = related
                 .iter()
                 .filter(|r| r.similarity > 0.6)
@@ -203,16 +193,12 @@ impl Skill for ContextualizeSkill {
 }
 
 /// Find tags used on semantically similar notes.
-async fn suggest_tags_from_similar(
-    ctx: &SkillContext,
-    note_id: uuid::Uuid,
-) -> Vec<String> {
+async fn suggest_tags_from_similar(ctx: &SkillContext, note_id: uuid::Uuid) -> Vec<String> {
     let related = embeddings::find_related_notes(ctx.db.pool(), note_id, 5)
         .await
         .unwrap_or_default();
 
-    let mut tag_counts: std::collections::HashMap<String, u32> =
-        std::collections::HashMap::new();
+    let mut tag_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
 
     for result in &related {
         if let Ok(note_tags) = tags::get_tags_for_note(ctx.db.pool(), result.note_id).await {

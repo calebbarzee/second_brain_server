@@ -60,7 +60,10 @@ impl Skill for ContinueWorkSkill {
 
         // Find semantically related content across KB
         let search_query = format!("{project_name} current work progress status");
-        let related = ctx.semantic_search(&search_query, 10).await.unwrap_or_default();
+        let related = ctx
+            .semantic_search(&search_query, 10)
+            .await
+            .unwrap_or_default();
 
         let context = serde_json::json!({
             "project": {

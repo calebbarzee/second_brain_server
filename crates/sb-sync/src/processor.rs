@@ -1,8 +1,8 @@
 use crate::watcher::FileChange;
+use sb_core::Database;
 use sb_core::db::notes;
 use sb_core::ingest::{self, IngestResult};
 use sb_core::path_map::PathMapper;
-use sb_core::Database;
 use sb_embed::EmbeddingPipeline;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -68,16 +68,10 @@ impl SyncProcessor {
     async fn handle_modified(&self, path: &std::path::Path) -> anyhow::Result<()> {
         match ingest::ingest_file(&self.db, path, &self.mapper).await? {
             IngestResult::Ingested(info) => {
-                tracing::info!(
-                    "ingested '{}' ({} links)",
-                    info.title,
-                    info.links_stored
-                );
+                tracing::info!("ingested '{}' ({} links)", info.title, info.links_stored);
 
                 // Embed the newly ingested note
-                if let Some(note) =
-                    notes::get_note_by_id(self.db.pool(), info.note_id).await?
-                {
+                if let Some(note) = notes::get_note_by_id(self.db.pool(), info.note_id).await? {
                     match self.pipeline.process_note(self.db.pool(), &note).await {
                         Ok((chunks, embeddings)) => {
                             tracing::info!(

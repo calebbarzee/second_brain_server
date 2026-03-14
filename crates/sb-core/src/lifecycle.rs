@@ -28,7 +28,7 @@ impl Lifecycle {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "active" => Some(Self::Active),
             "volatile" => Some(Self::Volatile),
@@ -47,17 +47,13 @@ impl std::fmt::Display for Lifecycle {
 
 /// Classify a note's lifecycle from filename patterns and frontmatter.
 /// Frontmatter `lifecycle: <value>` always takes precedence.
-pub fn classify_note(
-    file_path: &str,
-    frontmatter: Option<&serde_json::Value>,
-) -> Lifecycle {
+pub fn classify_note(file_path: &str, frontmatter: Option<&serde_json::Value>) -> Lifecycle {
     // 1. Frontmatter override (highest priority)
-    if let Some(fm) = frontmatter {
-        if let Some(lifecycle_str) = fm.get("lifecycle").and_then(|v| v.as_str()) {
-            if let Some(lc) = Lifecycle::from_str(lifecycle_str) {
-                return lc;
-            }
-        }
+    if let Some(fm) = frontmatter
+        && let Some(lifecycle_str) = fm.get("lifecycle").and_then(|v| v.as_str())
+        && let Some(lc) = Lifecycle::parse(lifecycle_str)
+    {
+        return lc;
     }
 
     // 2. Path-based: anything in archive/ directory
@@ -105,23 +101,35 @@ mod tests {
     #[test]
     fn test_classify_volatile_todo() {
         assert_eq!(classify_note("TODO_list.md", None), Lifecycle::Volatile);
-        assert_eq!(classify_note("project_todo_items.md", None), Lifecycle::Volatile);
+        assert_eq!(
+            classify_note("project_todo_items.md", None),
+            Lifecycle::Volatile
+        );
     }
 
     #[test]
     fn test_classify_volatile_daily() {
-        assert_eq!(classify_note("2026-03-04_daily_log.md", None), Lifecycle::Volatile);
+        assert_eq!(
+            classify_note("2026-03-04_daily_log.md", None),
+            Lifecycle::Volatile
+        );
     }
 
     #[test]
     fn test_classify_enduring() {
-        assert_eq!(classify_note("architecture_overview.md", None), Lifecycle::Enduring);
+        assert_eq!(
+            classify_note("architecture_overview.md", None),
+            Lifecycle::Enduring
+        );
         assert_eq!(classify_note("README.md", None), Lifecycle::Enduring);
     }
 
     #[test]
     fn test_classify_archived() {
-        assert_eq!(classify_note("/notes/archive/old_note.md", None), Lifecycle::Archived);
+        assert_eq!(
+            classify_note("/notes/archive/old_note.md", None),
+            Lifecycle::Archived
+        );
     }
 
     #[test]

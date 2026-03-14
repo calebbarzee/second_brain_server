@@ -113,42 +113,96 @@ struct Preset {
 }
 
 const PRESETS: &[(&str, Preset)] = &[
-    ("nomic", Preset {
-        provider: "ollama", url: "http://localhost:11434",
-        model: "nomic-embed-text", dimensions: 768, max_chunk_chars: 2400,
-    }),
-    ("nomic-moe", Preset {
-        provider: "ollama", url: "http://localhost:11434",
-        model: "nomic-embed-text-v2-moe", dimensions: 768, max_chunk_chars: 1200,
-    }),
-    ("all-minilm", Preset {
-        provider: "ollama", url: "http://localhost:11434",
-        model: "all-minilm", dimensions: 384, max_chunk_chars: 1000,
-    }),
-    ("snowflake", Preset {
-        provider: "ollama", url: "http://localhost:11434",
-        model: "snowflake-arctic-embed2", dimensions: 768, max_chunk_chars: 2400,
-    }),
-    ("mxbai", Preset {
-        provider: "ollama", url: "http://localhost:11434",
-        model: "mxbai-embed-large", dimensions: 1024, max_chunk_chars: 1200,
-    }),
-    ("qwen3", Preset {
-        provider: "ollama", url: "http://localhost:11434",
-        model: "qwen3-embedding", dimensions: 1024, max_chunk_chars: 3000,
-    }),
-    ("openai-small", Preset {
-        provider: "openai", url: "https://api.openai.com",
-        model: "text-embedding-3-small", dimensions: 1536, max_chunk_chars: 2400,
-    }),
-    ("openai-large", Preset {
-        provider: "openai", url: "https://api.openai.com",
-        model: "text-embedding-3-large", dimensions: 3072, max_chunk_chars: 2400,
-    }),
-    ("tei", Preset {
-        provider: "tei", url: "http://localhost:8090",
-        model: "BAAI/bge-base-en-v1.5", dimensions: 768, max_chunk_chars: 1200,
-    }),
+    (
+        "nomic",
+        Preset {
+            provider: "ollama",
+            url: "http://localhost:11434",
+            model: "nomic-embed-text",
+            dimensions: 768,
+            max_chunk_chars: 2400,
+        },
+    ),
+    (
+        "nomic-moe",
+        Preset {
+            provider: "ollama",
+            url: "http://localhost:11434",
+            model: "nomic-embed-text-v2-moe",
+            dimensions: 768,
+            max_chunk_chars: 1200,
+        },
+    ),
+    (
+        "all-minilm",
+        Preset {
+            provider: "ollama",
+            url: "http://localhost:11434",
+            model: "all-minilm",
+            dimensions: 384,
+            max_chunk_chars: 1000,
+        },
+    ),
+    (
+        "snowflake",
+        Preset {
+            provider: "ollama",
+            url: "http://localhost:11434",
+            model: "snowflake-arctic-embed2",
+            dimensions: 768,
+            max_chunk_chars: 2400,
+        },
+    ),
+    (
+        "mxbai",
+        Preset {
+            provider: "ollama",
+            url: "http://localhost:11434",
+            model: "mxbai-embed-large",
+            dimensions: 1024,
+            max_chunk_chars: 1200,
+        },
+    ),
+    (
+        "qwen3",
+        Preset {
+            provider: "ollama",
+            url: "http://localhost:11434",
+            model: "qwen3-embedding",
+            dimensions: 1024,
+            max_chunk_chars: 3000,
+        },
+    ),
+    (
+        "openai-small",
+        Preset {
+            provider: "openai",
+            url: "https://api.openai.com",
+            model: "text-embedding-3-small",
+            dimensions: 1536,
+            max_chunk_chars: 2400,
+        },
+    ),
+    (
+        "openai-large",
+        Preset {
+            provider: "openai",
+            url: "https://api.openai.com",
+            model: "text-embedding-3-large",
+            dimensions: 3072,
+            max_chunk_chars: 2400,
+        },
+    ),
+    (
+        "tei",
+        Preset {
+            provider: "tei",
+            url: "http://localhost:8090",
+            model: "BAAI/bge-base-en-v1.5",
+            dimensions: 768,
+            max_chunk_chars: 1200,
+        },
+    ),
 ];
 
 /// Default preset when nothing is configured.
@@ -162,8 +216,15 @@ impl EmbeddingConfig {
     /// Resolve optional/preset fields into a concrete config.
     /// Priority: explicit field > env var > preset > built-in default.
     pub fn resolve(&self) -> ResolvedEmbeddingConfig {
-        let preset_name = self.preset.as_deref()
-            .or_else(|| std::env::var("EMBEDDING_PRESET").ok().as_deref().map(|_| unreachable!()))
+        let preset_name = self
+            .preset
+            .as_deref()
+            .or_else(|| {
+                std::env::var("EMBEDDING_PRESET")
+                    .ok()
+                    .as_deref()
+                    .map(|_| unreachable!())
+            })
             .unwrap_or(DEFAULT_PRESET);
 
         // Allow env var to set the preset too
@@ -188,10 +249,10 @@ impl EmbeddingConfig {
             if let Some(v) = explicit {
                 return v;
             }
-            if let Ok(v) = std::env::var(env_key) {
-                if let Ok(n) = v.parse() {
-                    return n;
-                }
+            if let Ok(v) = std::env::var(env_key)
+                && let Ok(n) = v.parse()
+            {
+                return n;
             }
             preset_val
         };
@@ -204,7 +265,11 @@ impl EmbeddingConfig {
             model: resolve_str(&self.model, "EMBEDDING_MODEL", p.model),
             dimensions: resolve_usize(self.dimensions, "EMBEDDING_DIMS", p.dimensions),
             batch_size: self.batch_size,
-            max_chunk_chars: resolve_usize(self.max_chunk_chars, "EMBEDDING_MAX_CHUNK_CHARS", p.max_chunk_chars),
+            max_chunk_chars: resolve_usize(
+                self.max_chunk_chars,
+                "EMBEDDING_MAX_CHUNK_CHARS",
+                p.max_chunk_chars,
+            ),
         }
     }
 }
@@ -246,7 +311,9 @@ impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         // Try to find and load the TOML config file
         let toml_paths = [
-            std::env::current_dir().ok().map(|p| p.join("second-brain.toml")),
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.join("second-brain.toml")),
             std::env::current_exe()
                 .ok()
                 .and_then(|p| p.parent().map(|d| d.join("second-brain.toml"))),
@@ -270,10 +337,9 @@ impl Config {
         }
 
         // Pure env-var fallback (no TOML found)
-        let database_url =
-            std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-                "postgresql://secondbrain:secondbrain@localhost:5432/secondbrain".to_string()
-            });
+        let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgresql://secondbrain:secondbrain@localhost:5432/secondbrain".to_string()
+        });
 
         Ok(Self {
             database: DatabaseConfig { url: database_url },
@@ -309,7 +375,10 @@ dimensions = 1536
 batch_size = 64
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.database.url, "postgresql://user:pass@localhost:5432/testdb");
+        assert_eq!(
+            config.database.url,
+            "postgresql://user:pass@localhost:5432/testdb"
+        );
         assert_eq!(config.notes.paths.len(), 2);
         let resolved = config.embedding.resolve();
         assert_eq!(resolved.provider, "openai");

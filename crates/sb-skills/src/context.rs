@@ -1,9 +1,9 @@
 //! SkillContext: shared state and helpers for skill execution.
 
 use crate::llm::LlmProvider;
+use sb_core::Database;
 use sb_core::db::{embeddings, notes, projects, tasks};
 use sb_core::models::{Note, Task};
-use sb_core::Database;
 use sb_embed::EmbeddingPipeline;
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -34,9 +34,7 @@ fn extract_frontmatter(raw: &str) -> (Option<serde_json::Value>, &str) {
         let body = trimmed[body_start..].trim_start_matches('\n');
 
         // Try to parse as YAML → JSON value
-        match serde_json::from_str::<serde_json::Value>(
-            &serde_yaml_frontmatter(yaml_str),
-        ) {
+        match serde_json::from_str::<serde_json::Value>(&serde_yaml_frontmatter(yaml_str)) {
             Ok(val) => (Some(val), body),
             Err(_) => (None, raw),
         }
@@ -80,7 +78,10 @@ fn extract_title(body: &str) -> String {
 
     for event in parser {
         match event {
-            Event::Start(Tag::Heading { level: HeadingLevel::H1, .. }) => {
+            Event::Start(Tag::Heading {
+                level: HeadingLevel::H1,
+                ..
+            }) => {
                 in_h1 = true;
             }
             Event::Text(text) if in_h1 => {
@@ -376,7 +377,8 @@ mod tests {
 
     #[test]
     fn test_extract_tasks() {
-        let raw = "# Tasks\n\n- [ ] Buy groceries\n- [x] Write tests\n- [X] Ship feature\n- Not a task\n";
+        let raw =
+            "# Tasks\n\n- [ ] Buy groceries\n- [x] Write tests\n- [X] Ship feature\n- Not a task\n";
         let parsed = parse_markdown(raw);
         assert_eq!(parsed.tasks.len(), 3);
         assert!(!parsed.tasks[0].completed);

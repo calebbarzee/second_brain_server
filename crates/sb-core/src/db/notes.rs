@@ -43,9 +43,7 @@ pub async fn upsert_note(pool: &PgPool, note: &CreateNote) -> anyhow::Result<Not
 
 /// Get a note by its file path.
 pub async fn get_note_by_path(pool: &PgPool, file_path: &str) -> anyhow::Result<Option<Note>> {
-    let sql = format!(
-        "SELECT {NOTE_COLS} FROM notes WHERE file_path = $1 AND deleted = false"
-    );
+    let sql = format!("SELECT {NOTE_COLS} FROM notes WHERE file_path = $1 AND deleted = false");
     let row = sqlx::query_as::<_, Note>(&sql)
         .bind(file_path)
         .fetch_optional(pool)
@@ -56,9 +54,7 @@ pub async fn get_note_by_path(pool: &PgPool, file_path: &str) -> anyhow::Result<
 
 /// Get a note by ID.
 pub async fn get_note_by_id(pool: &PgPool, id: Uuid) -> anyhow::Result<Option<Note>> {
-    let sql = format!(
-        "SELECT {NOTE_COLS} FROM notes WHERE id = $1 AND deleted = false"
-    );
+    let sql = format!("SELECT {NOTE_COLS} FROM notes WHERE id = $1 AND deleted = false");
     let row = sqlx::query_as::<_, Note>(&sql)
         .bind(id)
         .fetch_optional(pool)
@@ -101,12 +97,11 @@ pub async fn search_notes(pool: &PgPool, query: &str, limit: i64) -> anyhow::Res
 
 /// Soft-delete a note by file path.
 pub async fn soft_delete_note(pool: &PgPool, file_path: &str) -> anyhow::Result<bool> {
-    let result = sqlx::query(
-        "UPDATE notes SET deleted = true, updated_at = NOW() WHERE file_path = $1",
-    )
-    .bind(file_path)
-    .execute(pool)
-    .await?;
+    let result =
+        sqlx::query("UPDATE notes SET deleted = true, updated_at = NOW() WHERE file_path = $1")
+            .bind(file_path)
+            .execute(pool)
+            .await?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -212,11 +207,7 @@ pub async fn get_mirrored_notes(pool: &PgPool, source_project: &str) -> anyhow::
 }
 
 /// Update the file_path of a note (used when archiving/moving).
-pub async fn update_file_path(
-    pool: &PgPool,
-    note_id: Uuid,
-    new_path: &str,
-) -> anyhow::Result<()> {
+pub async fn update_file_path(pool: &PgPool, note_id: Uuid, new_path: &str) -> anyhow::Result<()> {
     sqlx::query("UPDATE notes SET file_path = $2, updated_at = NOW() WHERE id = $1")
         .bind(note_id)
         .bind(new_path)
@@ -288,12 +279,11 @@ pub async fn note_content_changed(
     file_path: &str,
     new_hash: &str,
 ) -> anyhow::Result<bool> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT content_hash FROM notes WHERE file_path = $1 AND deleted = false",
-    )
-    .bind(file_path)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT content_hash FROM notes WHERE file_path = $1 AND deleted = false")
+            .bind(file_path)
+            .fetch_optional(pool)
+            .await?;
 
     match row {
         Some((existing_hash,)) => Ok(existing_hash != new_hash),

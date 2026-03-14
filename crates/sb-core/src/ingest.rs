@@ -1,7 +1,7 @@
 use crate::db::{links, notes, sync_state};
 use crate::models::CreateNote;
 use crate::path_map::PathMapper;
-use crate::{markdown, Database};
+use crate::{Database, markdown};
 use std::path::Path;
 
 /// Result of ingesting a single file.
@@ -130,10 +130,7 @@ pub struct IngestStats {
 /// For relative paths: resolve relative to the source note's directory.
 fn resolve_link_path(source_canonical_path: &str, target: &str, is_wikilink: bool) -> String {
     // Skip external URLs
-    if target.starts_with("http://")
-        || target.starts_with("https://")
-        || target.starts_with('#')
-    {
+    if target.starts_with("http://") || target.starts_with("https://") || target.starts_with('#') {
         return target.to_string();
     }
 

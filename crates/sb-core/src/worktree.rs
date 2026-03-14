@@ -76,12 +76,7 @@ pub fn create_worktree(
         check_branch_not_checked_out(config, &branch)?;
 
         let status = Command::new("git")
-            .args([
-                "worktree",
-                "add",
-                &worktree_path.to_string_lossy(),
-                &branch,
-            ])
+            .args(["worktree", "add", &worktree_path.to_string_lossy(), &branch])
             .current_dir(&config.main_repo)
             .output()?;
         if !status.status.success() {

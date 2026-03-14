@@ -96,7 +96,10 @@ mod tests {
             // Vectors should be non-zero
             assert!(vec.iter().any(|&v| v != 0.0));
         } else {
-            eprintln!("Skipping TEI test (server not available): {:?}", result.err());
+            eprintln!(
+                "Skipping TEI test (server not available): {:?}",
+                result.err()
+            );
         }
     }
 

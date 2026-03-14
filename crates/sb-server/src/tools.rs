@@ -497,12 +497,9 @@ impl SecondBrainServer {
             )
             .await
         } else {
-            sb_core::db::embeddings::semantic_search(self.db.pool(), &query_vector, limit)
-                .await
+            sb_core::db::embeddings::semantic_search(self.db.pool(), &query_vector, limit).await
         }
-        .map_err(|e| {
-            McpError::internal_error(format!("semantic search failed: {e}"), None)
-        })?;
+        .map_err(|e| McpError::internal_error(format!("semantic search failed: {e}"), None))?;
 
         if results.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
@@ -613,7 +610,11 @@ impl SecondBrainServer {
             .await
             .unwrap_or(0);
 
-        let mode = if only_new { "new only" } else { "full re-embed" };
+        let mode = if only_new {
+            "new only"
+        } else {
+            "full re-embed"
+        };
         let mut msg = format!(
             "Embedding complete ({}): {} notes processed, {} chunks created, {} embeddings generated\nTotal embeddings in database: {}",
             mode, stats.notes_processed, stats.chunks_created, stats.embeddings_created, total
@@ -900,10 +901,10 @@ impl SecondBrainServer {
                 output.notes_modified.join(", ")
             ));
         }
-        if let Some(diff) = &output.git_diff {
-            if !diff.is_empty() {
-                parts.push(format!("\nGit diff:\n```\n{}\n```", truncate(diff, 2000)));
-            }
+        if let Some(diff) = &output.git_diff
+            && !diff.is_empty()
+        {
+            parts.push(format!("\nGit diff:\n```\n{}\n```", truncate(diff, 2000)));
         }
 
         // Include structured context for Claude
@@ -1061,9 +1062,12 @@ impl SecondBrainServer {
 
         let results = match mode {
             "filename" => sb_core::file_search::search_filename(&search_dirs, &params.query, limit)
-                .map_err(|e| McpError::internal_error(format!("filename search failed: {e}"), None))?,
-            _ => sb_core::file_search::search_content(&search_dirs, &params.query, limit)
-                .map_err(|e| McpError::internal_error(format!("content search failed: {e}"), None))?,
+                .map_err(|e| {
+                    McpError::internal_error(format!("filename search failed: {e}"), None)
+                })?,
+            _ => sb_core::file_search::search_content(&search_dirs, &params.query, limit).map_err(
+                |e| McpError::internal_error(format!("content search failed: {e}"), None),
+            )?,
         };
 
         if results.is_empty() {
@@ -1106,7 +1110,7 @@ impl SecondBrainServer {
     ) -> Result<CallToolResult, McpError> {
         let _session = self.require_session()?;
         let lifecycle =
-            sb_core::lifecycle::Lifecycle::from_str(&params.lifecycle).ok_or_else(|| {
+            sb_core::lifecycle::Lifecycle::parse(&params.lifecycle).ok_or_else(|| {
                 McpError::invalid_params(
                     format!(
                         "invalid lifecycle '{}': must be active, volatile, enduring, or archived",
@@ -1226,7 +1230,9 @@ impl SecondBrainServer {
             if let Some(existing) = session.as_ref() {
                 return Ok(CallToolResult::success(vec![Content::text(format!(
                     "Session already active:\n  User: {} <{}>\n  Branch: {}\n  Worktree: {}",
-                    existing.username, existing.email, existing.branch,
+                    existing.username,
+                    existing.email,
+                    existing.branch,
                     existing.worktree_path.display()
                 ))]));
             }
@@ -1239,11 +1245,7 @@ impl SecondBrainServer {
             )
         })?;
 
-        let session_id = format!(
-            "{}-{}",
-            params.username,
-            uuid::Uuid::new_v4().as_simple()
-        );
+        let session_id = format!("{}-{}", params.username, uuid::Uuid::new_v4().as_simple());
 
         let info = sb_core::worktree::create_worktree(
             config,
@@ -1256,7 +1258,10 @@ impl SecondBrainServer {
 
         let msg = format!(
             "Session initialized:\n  User: {} <{}>\n  Branch: {}\n  Worktree: {}\n\nWrite tools (note_create, note_update, note_stamp) are now enabled.",
-            info.username, info.email, info.branch, info.worktree_path.display()
+            info.username,
+            info.email,
+            info.branch,
+            info.worktree_path.display()
         );
 
         *self.session.lock().unwrap() = Some(info);
@@ -1329,8 +1334,7 @@ impl SecondBrainServer {
             return None;
         }
 
-        let ai_name =
-            std::env::var("AI_GIT_NAME").unwrap_or_else(|_| DEFAULT_AI_NAME.to_string());
+        let ai_name = std::env::var("AI_GIT_NAME").unwrap_or_else(|_| DEFAULT_AI_NAME.to_string());
         let ai_email =
             std::env::var("AI_GIT_EMAIL").unwrap_or_else(|_| DEFAULT_AI_EMAIL.to_string());
 
@@ -1354,16 +1358,14 @@ impl SecondBrainServer {
 impl Drop for SecondBrainServer {
     fn drop(&mut self) {
         // Only clean up if we're the last holder of the session Arc
-        if Arc::strong_count(&self.session) == 1 {
-            if let Some(config) = &self.worktree_config {
-                let session = self.session.lock().unwrap();
-                if let Some(info) = session.as_ref() {
-                    tracing::info!("cleaning up worktree for session {}", info.session_id);
-                    if let Err(e) =
-                        sb_core::worktree::remove_worktree(config, &info.session_id)
-                    {
-                        tracing::error!("worktree cleanup failed: {e}");
-                    }
+        if Arc::strong_count(&self.session) == 1
+            && let Some(config) = &self.worktree_config
+        {
+            let session = self.session.lock().unwrap();
+            if let Some(info) = session.as_ref() {
+                tracing::info!("cleaning up worktree for session {}", info.session_id);
+                if let Err(e) = sb_core::worktree::remove_worktree(config, &info.session_id) {
+                    tracing::error!("worktree cleanup failed: {e}");
                 }
             }
         }
@@ -1406,21 +1408,24 @@ fn unified_diff(old: &str, new: &str, path: &str) -> String {
             i += 1;
         }
 
-        out.push_str(&format!("@@ -{},{} +{},{} @@\n",
-            hunk_start + 1, i - hunk_start,
-            hunk_start + 1, i - hunk_start,
+        out.push_str(&format!(
+            "@@ -{},{} +{},{} @@\n",
+            hunk_start + 1,
+            i - hunk_start,
+            hunk_start + 1,
+            i - hunk_start,
         ));
 
         for j in hunk_start..i {
-            if let Some(ol) = old_lines.get(j) {
-                if new_lines.get(j) != Some(ol) {
-                    out.push_str(&format!("-{ol}\n"));
-                }
+            if let Some(ol) = old_lines.get(j)
+                && new_lines.get(j) != Some(ol)
+            {
+                out.push_str(&format!("-{ol}\n"));
             }
-            if let Some(nl) = new_lines.get(j) {
-                if old_lines.get(j) != Some(nl) {
-                    out.push_str(&format!("+{nl}\n"));
-                }
+            if let Some(nl) = new_lines.get(j)
+                && old_lines.get(j) != Some(nl)
+            {
+                out.push_str(&format!("+{nl}\n"));
             }
         }
     }

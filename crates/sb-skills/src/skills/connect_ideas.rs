@@ -31,9 +31,7 @@ impl Skill for ConnectIdeasSkill {
         ctx: &SkillContext,
         params: &SkillParams,
     ) -> anyhow::Result<SkillOutput> {
-        let period = time_period::parse_period(
-            params.period.as_deref().unwrap_or("this-month"),
-        )?;
+        let period = time_period::parse_period(params.period.as_deref().unwrap_or("this-month"))?;
 
         // Get recent notes
         let notes = ctx
@@ -44,12 +42,10 @@ impl Skill for ConnectIdeasSkill {
 
         // For each note, find related notes and check if they're already linked
         for note in &notes {
-            let related =
-                embeddings::find_related_notes(ctx.db.pool(), note.id, 5).await?;
+            let related = embeddings::find_related_notes(ctx.db.pool(), note.id, 5).await?;
 
             // Get existing outbound links for this note
-            let existing_links =
-                links::get_links_from_note(ctx.db.pool(), note.id).await?;
+            let existing_links = links::get_links_from_note(ctx.db.pool(), note.id).await?;
             let linked_note_ids: std::collections::HashSet<_> = existing_links
                 .iter()
                 .filter_map(|l| l.target_note_id)
@@ -75,8 +71,8 @@ impl Skill for ConnectIdeasSkill {
                 // Check if they're in different "contexts" (different projects or different paths)
                 let same_dir = std::path::Path::new(&note.file_path).parent()
                     == std::path::Path::new(&result.note_file_path).parent();
-                let cross_context = !same_dir
-                    || note.source_project != Some(result.note_file_path.clone());
+                let cross_context =
+                    !same_dir || note.source_project != Some(result.note_file_path.clone());
 
                 connections.push(serde_json::json!({
                     "note_a": {
@@ -97,9 +93,19 @@ impl Skill for ConnectIdeasSkill {
 
         // Sort by similarity (highest first)
         connections.sort_by(|a, b| {
-            let sim_a: f64 = a["similarity"].as_str().unwrap_or("0").parse().unwrap_or(0.0);
-            let sim_b: f64 = b["similarity"].as_str().unwrap_or("0").parse().unwrap_or(0.0);
-            sim_b.partial_cmp(&sim_a).unwrap_or(std::cmp::Ordering::Equal)
+            let sim_a: f64 = a["similarity"]
+                .as_str()
+                .unwrap_or("0")
+                .parse()
+                .unwrap_or(0.0);
+            let sim_b: f64 = b["similarity"]
+                .as_str()
+                .unwrap_or("0")
+                .parse()
+                .unwrap_or(0.0);
+            sim_b
+                .partial_cmp(&sim_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         // Limit to top connections

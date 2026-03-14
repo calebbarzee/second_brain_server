@@ -31,12 +31,10 @@ pub async fn upsert_sync_state(
 
 /// Get the sync state for a specific note.
 pub async fn get_sync_state(pool: &PgPool, note_id: Uuid) -> anyhow::Result<Option<SyncState>> {
-    let row = sqlx::query_as::<_, SyncState>(
-        "SELECT * FROM sync_state WHERE note_id = $1",
-    )
-    .bind(note_id)
-    .fetch_optional(pool)
-    .await?;
+    let row = sqlx::query_as::<_, SyncState>("SELECT * FROM sync_state WHERE note_id = $1")
+        .bind(note_id)
+        .fetch_optional(pool)
+        .await?;
 
     Ok(row)
 }
@@ -47,12 +45,11 @@ pub async fn get_sync_state_by_hash(
     note_id: Uuid,
     file_hash: &str,
 ) -> anyhow::Result<bool> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT file_hash FROM sync_state WHERE note_id = $1",
-    )
-    .bind(note_id)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT file_hash FROM sync_state WHERE note_id = $1")
+            .bind(note_id)
+            .fetch_optional(pool)
+            .await?;
 
     match row {
         Some((existing_hash,)) => Ok(existing_hash == file_hash),

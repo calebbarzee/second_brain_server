@@ -265,11 +265,7 @@ mod tests {
     #[test]
     fn test_detect_path_based_subdir() {
         // projects/<name>/file.md → project is the subdir name
-        let result = detect_project(
-            "/home/user/notes/projects/bread/stale_design.md",
-            &[],
-            &[],
-        );
+        let result = detect_project("/home/user/notes/projects/bread/stale_design.md", &[], &[]);
         assert!(result.is_some());
         let p = result.unwrap();
         assert_eq!(p.name, "bread");
@@ -310,11 +306,7 @@ mod tests {
             project_name: "stale_bread".to_string(),
             path_prefix: "stale_bread".to_string(),
         }];
-        let result = detect_project(
-            "/home/user/notes/stale_bread_status.md",
-            &mappings,
-            &[],
-        );
+        let result = detect_project("/home/user/notes/stale_bread_status.md", &mappings, &[]);
         assert!(result.is_some());
         let p = result.unwrap();
         assert_eq!(p.name, "stale_bread");
@@ -324,11 +316,7 @@ mod tests {
     #[test]
     fn test_fuzzy_match_known_project() {
         let known = vec!["stale_bread".to_string()];
-        let result = detect_project(
-            "/home/user/notes/stale_bread_architecture.md",
-            &[],
-            &known,
-        );
+        let result = detect_project("/home/user/notes/stale_bread_architecture.md", &[], &known);
         assert!(result.is_some());
         let p = result.unwrap();
         assert_eq!(p.name, "stale_bread");
@@ -353,11 +341,7 @@ mod tests {
     fn test_longer_project_matches_first() {
         // "stale_bread" should match before "stale"
         let known = vec!["stale".to_string(), "stale_bread".to_string()];
-        let result = detect_project(
-            "/home/user/notes/stale_bread_status.md",
-            &[],
-            &known,
-        );
+        let result = detect_project("/home/user/notes/stale_bread_status.md", &[], &known);
         assert!(result.is_some());
         let p = result.unwrap();
         assert_eq!(p.name, "stale_bread");

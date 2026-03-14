@@ -72,16 +72,15 @@ pub fn get_current_branch(repo_path: &Path) -> Option<String> {
 /// - Returns stats and the list of mirror paths that are current.
 ///
 /// This function NEVER modifies the project directory (observer pattern).
-pub fn sync_project(
-    config: &ProjectSyncConfig,
-    kb_root: &Path,
-) -> ProjectSyncStats {
+pub fn sync_project(config: &ProjectSyncConfig, kb_root: &Path) -> ProjectSyncStats {
     let mut stats = ProjectSyncStats::default();
     let mirror_dir = kb_root.join(&config.mirror_to);
 
     // Ensure mirror directory exists
     if let Err(e) = std::fs::create_dir_all(&mirror_dir) {
-        stats.errors.push(format!("failed to create mirror dir: {e}"));
+        stats
+            .errors
+            .push(format!("failed to create mirror dir: {e}"));
         return stats;
     }
 
@@ -93,7 +92,9 @@ pub fn sync_project(
         let rel_path = match source_file.strip_prefix(&config.source_path) {
             Ok(p) => p,
             Err(_) => {
-                stats.errors.push(format!("path strip failed: {}", source_file.display()));
+                stats
+                    .errors
+                    .push(format!("path strip failed: {}", source_file.display()));
                 continue;
             }
         };
@@ -170,10 +171,7 @@ fn collect_matching_files(root: &Path, patterns: &[String]) -> Vec<PathBuf> {
         .filter(|e| e.file_type().is_file())
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
     {
-        let rel_path = entry
-            .path()
-            .strip_prefix(root)
-            .unwrap_or(entry.path());
+        let rel_path = entry.path().strip_prefix(root).unwrap_or(entry.path());
         let rel_str = rel_path.to_string_lossy();
 
         if patterns.iter().any(|p| matches_glob_pattern(p, &rel_str)) {
@@ -195,14 +193,13 @@ fn matches_glob_pattern(pattern: &str, path: &str) -> bool {
     }
 
     // Handle **/filename pattern (match filename anywhere)
-    if pattern.starts_with("**/") {
-        let suffix = &pattern[3..];
-        if !suffix.contains('*') {
-            return path.ends_with(suffix)
-                || Path::new(path)
-                    .file_name()
-                    .is_some_and(|f| f.to_string_lossy() == suffix);
-        }
+    if let Some(suffix) = pattern.strip_prefix("**/")
+        && !suffix.contains('*')
+    {
+        return path.ends_with(suffix)
+            || Path::new(path)
+                .file_name()
+                .is_some_and(|f| f.to_string_lossy() == suffix);
     }
 
     // Handle prefix/**/*.ext pattern

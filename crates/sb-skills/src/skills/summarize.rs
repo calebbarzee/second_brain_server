@@ -30,9 +30,7 @@ impl Skill for SummarizeSkill {
         ctx: &SkillContext,
         params: &SkillParams,
     ) -> anyhow::Result<SkillOutput> {
-        let period = time_period::parse_period(
-            params.period.as_deref().unwrap_or("this-week"),
-        )?;
+        let period = time_period::parse_period(params.period.as_deref().unwrap_or("this-week"))?;
 
         // Resolve project filter
         let project = if let Some(proj_name) = &params.project {
@@ -142,9 +140,7 @@ impl Skill for SummarizeSkill {
         // If write_output is set, create a summary note
         if params.write_output {
             let date = chrono::Utc::now().format("%Y-%m-%d");
-            let note_path = ctx
-                .notes_root
-                .join(format!("summaries/{date}_summary.md"));
+            let note_path = ctx.notes_root.join(format!("summaries/{date}_summary.md"));
 
             let content = format!(
                 "---\nlifecycle: volatile\ntype: summary\nperiod: {}\n---\n\n# Summary: {}\n\n_{} notes, {} open tasks, {} completed tasks_\n\n\
@@ -163,7 +159,9 @@ impl Skill for SummarizeSkill {
 
             // Ingest the new note
             let mapper = sb_core::PathMapper::new(ctx.notes_root.clone());
-            sb_core::ingest::ingest_file(&ctx.db, &note_path, &mapper).await.ok();
+            sb_core::ingest::ingest_file(&ctx.db, &note_path, &mapper)
+                .await
+                .ok();
 
             output
                 .notes_created

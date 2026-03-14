@@ -103,8 +103,8 @@ async fn debounce_loop(
             // We have pending events — wait up to debounce_duration for more
             match tokio::time::timeout(debounce_duration, raw_rx.recv()).await {
                 Ok(Some(e)) => Some(e),
-                Ok(None) => break,       // Channel closed
-                Err(_timeout) => None,   // Debounce window expired — flush
+                Ok(None) => break,     // Channel closed
+                Err(_timeout) => None, // Debounce window expired — flush
             }
         };
 

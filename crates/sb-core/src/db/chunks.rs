@@ -38,12 +38,11 @@ pub async fn delete_chunks_for_note(pool: &PgPool, note_id: Uuid) -> anyhow::Res
 
 /// Get all chunks for a note, ordered by chunk_index.
 pub async fn get_chunks_for_note(pool: &PgPool, note_id: Uuid) -> anyhow::Result<Vec<Chunk>> {
-    let rows = sqlx::query_as::<_, Chunk>(
-        "SELECT * FROM chunks WHERE note_id = $1 ORDER BY chunk_index",
-    )
-    .bind(note_id)
-    .fetch_all(pool)
-    .await?;
+    let rows =
+        sqlx::query_as::<_, Chunk>("SELECT * FROM chunks WHERE note_id = $1 ORDER BY chunk_index")
+            .bind(note_id)
+            .fetch_all(pool)
+            .await?;
     Ok(rows)
 }
 

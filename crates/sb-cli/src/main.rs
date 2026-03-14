@@ -409,7 +409,7 @@ async fn cmd_skill(
 }
 
 async fn cmd_classify(db: &sb_core::Database, path: &str, lifecycle: &str) -> Result<()> {
-    let lc = sb_core::lifecycle::Lifecycle::from_str(lifecycle).ok_or_else(|| {
+    let lc = sb_core::lifecycle::Lifecycle::parse(lifecycle).ok_or_else(|| {
         anyhow::anyhow!(
             "invalid lifecycle: {lifecycle} (use: active, volatile, enduring, archived)"
         )

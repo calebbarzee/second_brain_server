@@ -51,8 +51,7 @@ pub fn parse_period(period: &str) -> anyhow::Result<TimePeriod> {
             })
         }
         "last-week" | "last_week" => {
-            let this_monday =
-                today - Duration::days(today.weekday().num_days_from_monday() as i64);
+            let this_monday = today - Duration::days(today.weekday().num_days_from_monday() as i64);
             let last_monday = this_monday - Duration::days(7);
             Ok(TimePeriod {
                 start: day_start(last_monday),

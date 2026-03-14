@@ -95,14 +95,11 @@ impl SkillRunner {
                 "[second-brain] {skill_name}: {}",
                 summarize_changes(&output)
             );
-            if let Ok(Some(_post_sha)) =
-                git_ops::snapshot_commit(&self.ctx.notes_root, &post_msg)
+            if let Ok(Some(_post_sha)) = git_ops::snapshot_commit(&self.ctx.notes_root, &post_msg)
+                && let Some(pre_sha) = &pre_commit
+                && let Ok(diff) = git_ops::diff_since(&self.ctx.notes_root, pre_sha)
             {
-                if let Some(pre_sha) = &pre_commit {
-                    if let Ok(diff) = git_ops::diff_since(&self.ctx.notes_root, pre_sha) {
-                        output.git_diff = Some(diff);
-                    }
-                }
+                output.git_diff = Some(diff);
             }
         }
 
@@ -113,13 +110,8 @@ impl SkillRunner {
             "completed"
         };
 
-        skill_runs::complete_skill_run(
-            self.ctx.db.pool(),
-            run.id,
-            status,
-            Some(&output.summary),
-        )
-        .await?;
+        skill_runs::complete_skill_run(self.ctx.db.pool(), run.id, status, Some(&output.summary))
+            .await?;
 
         Ok(output)
     }

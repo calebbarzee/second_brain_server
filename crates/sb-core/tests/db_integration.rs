@@ -1,6 +1,6 @@
+use sb_core::Database;
 use sb_core::db::notes;
 use sb_core::models::CreateNote;
-use sb_core::Database;
 
 fn test_db_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -166,23 +166,26 @@ async fn test_fulltext_search() {
             file_path: "/test/search-rust.md".to_string(),
             title: "Rust Programming".to_string(),
             content_hash: "s1".to_string(),
-            raw_content: "Rust is a systems programming language focused on safety and performance."
-                .to_string(),
+            raw_content:
+                "Rust is a systems programming language focused on safety and performance."
+                    .to_string(),
             frontmatter: None,
         },
         CreateNote {
             file_path: "/test/search-python.md".to_string(),
             title: "Python Basics".to_string(),
             content_hash: "s2".to_string(),
-            raw_content: "Python is an interpreted language popular for data science and scripting."
-                .to_string(),
+            raw_content:
+                "Python is an interpreted language popular for data science and scripting."
+                    .to_string(),
             frontmatter: None,
         },
         CreateNote {
             file_path: "/test/search-cooking.md".to_string(),
             title: "Cooking Tips".to_string(),
             content_hash: "s3".to_string(),
-            raw_content: "Always preheat the oven before baking. Use fresh ingredients.".to_string(),
+            raw_content: "Always preheat the oven before baking. Use fresh ingredients."
+                .to_string(),
             frontmatter: None,
         },
     ];
@@ -194,16 +197,24 @@ async fn test_fulltext_search() {
     // Search for "programming" — should find Rust note
     let results = notes::search_notes(pool, "programming", 10).await.unwrap();
     assert!(!results.is_empty());
-    assert!(results.iter().any(|n| n.file_path == "/test/search-rust.md"));
+    assert!(
+        results
+            .iter()
+            .any(|n| n.file_path == "/test/search-rust.md")
+    );
 
     // Search for "cooking" — should find cooking note only
     let results = notes::search_notes(pool, "cooking", 10).await.unwrap();
-    assert!(results
-        .iter()
-        .any(|n| n.file_path == "/test/search-cooking.md"));
-    assert!(!results
-        .iter()
-        .any(|n| n.file_path == "/test/search-rust.md"));
+    assert!(
+        results
+            .iter()
+            .any(|n| n.file_path == "/test/search-cooking.md")
+    );
+    assert!(
+        !results
+            .iter()
+            .any(|n| n.file_path == "/test/search-rust.md")
+    );
 
     // Search for "language" — should find Rust and Python
     let results = notes::search_notes(pool, "language", 10).await.unwrap();

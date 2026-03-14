@@ -11,7 +11,7 @@ write your notes.
 
 ### Prerequisites
 
-- **Rust 1.88+** (run `rustup update stable`)
+- **Rust 1.88+** (1.93+ recommended; run `rustup update stable`)
 - **Docker & Docker Compose** (for PostgreSQL and the embedding server)
 
 ### 1. Start the infrastructure
@@ -85,8 +85,8 @@ You ask a question  ←  MCP returns results  ←  DB stores notes + vectors
    `[[wikilinks]]`) are extracted and stored in a graph.
 
 3. **The embedding pipeline** chunks each note by heading sections, sends
-   chunks to the embedding server, and stores 768-dimensional vectors in
-   pgvector with an HNSW index.
+   chunks to the embedding provider, and stores vectors in pgvector with
+   an HNSW index. Vector dimensions are configurable per preset.
 
 4. **MCP tools** expose everything to your AI assistant: full-text search,
    semantic search, link graph traversal, note creation, and updates.
@@ -102,13 +102,16 @@ on disk are canonical. If the database disappears, re-ingest and you're back.
 | `chunks` | Note sections with heading context |
 | `embeddings` | 768-dim vectors (HNSW indexed) |
 | `links` | Directed graph between notes |
-| `tags`, `note_tags` | Tagging (schema ready, not yet populated) |
+| `tags`, `note_tags` | Tagging system |
+| `projects`, `note_projects` | Project associations and detection |
 | `sync_state` | Tracks what's been synced and when |
-| `skill_runs`, `tasks` | Future: skill engine tracking |
+| `skill_runs` | Skill execution history and tracking |
+| `tasks` | Tasks extracted from note checkboxes |
+| `settings` | Runtime configuration (tracked branch, etc.) |
 
 ---
 
-## The 15 MCP Tools
+## The 17 MCP Tools
 
 ### Search & Read
 
@@ -131,6 +134,14 @@ on disk are canonical. If the database disappears, re-ingest and you're back.
 | `note_ingest` | Manually ingest a file or directory into the database. |
 | `embed_notes` | Trigger embedding for any notes missing vectors. |
 
+### Metadata & Sessions
+
+| Tool | What it does |
+|------|-------------|
+| `note_classify` | Set a note's lifecycle: active, volatile, enduring, or archived. |
+| `note_stamp` | Stamp edit metadata in frontmatter — records editor name and timestamp. |
+| `session_init` | Initialize an isolated git worktree for multi-user editing sessions. |
+
 ### Skills & Projects
 
 | Tool | What it does |
@@ -138,7 +149,6 @@ on disk are canonical. If the database disappears, re-ingest and you're back.
 | `run_skill` | Run a composable workflow (summarize, reflect, continue-work, connect-ideas, contextualize). |
 | `project_list` | List all detected projects with note counts. |
 | `project_context` | Get comprehensive context for a project (recent notes, open tasks, lifecycle breakdown). |
-| `note_classify` | Set a note's lifecycle: active, volatile, enduring, or archived. |
 
 ### When to use which search
 
@@ -204,18 +214,19 @@ second-brain (workspace)
 │               ingestion pipeline. Everything depends on this.
 │
 ├── sb-embed    Embedding pipeline: pluggable providers (TEI, OpenAI,
-│               future Ollama), markdown chunker, batch processor.
+│               Ollama), markdown chunker, batch processor.
 │
 ├── sb-sync     File watcher (notify v7) + sync processor. Detects file
 │               changes, ingests, embeds. Runs as a background tokio task.
 │
-├── sb-server   MCP server binary. 15 tools via rmcp macros. Starts the
-│               watcher, serves on stdio.
+├── sb-server   MCP server binary. 17 tools via rmcp. Supports stdio
+│               (local) and HTTP (network) transports.
 │
-├── sb-skills   Skill engine: composable workflows for
-│               contextualize, summarize, reflect.
+├── sb-skills   Skill engine: composable workflows for summarize,
+│               reflect, continue-work, connect-ideas, contextualize.
 │
-└── sb-cli      Lightweight CLI for manual ingestion and search.
+└── sb-cli      CLI for ingestion, search, embedding, skills, and
+                project management.
 ```
 
 ### Data flow
@@ -246,14 +257,15 @@ second-brain (workspace)
 
 ### Embedding strategy
 
-Notes are chunked by heading structure (`## Section`) with a max chunk
-size of ~1500 characters. Each chunk preserves its heading context, so
-search results can point you to the right section, not just the right file.
+Notes are chunked by heading structure (`## Section`) with a configurable
+max chunk size (default ~2400 characters for nomic). Each chunk preserves
+its heading context, so search results can point you to the right section,
+not just the right file.
 
-The default model is BAAI/bge-base-en-v1.5 (768 dimensions), running
-locally via Docker. No API keys needed. To switch to OpenAI or Ollama,
-implement the `EmbeddingProvider` trait — the pipeline doesn't care which
-backend provides the vectors.
+The default model is nomic-embed-text (768 dimensions), running locally
+via Ollama. No API keys needed. Nine embedding presets are available —
+switch between Ollama, TEI, and OpenAI models by changing the preset in
+config. The pipeline is provider-agnostic via the `EmbeddingProvider` trait.
 
 ### Link resolution
 
@@ -280,8 +292,9 @@ ingest everything at once for links to work.
 |----------|---------|-------------|
 | `DATABASE_URL` | `postgresql://secondbrain:secondbrain@localhost:5432/secondbrain` | PostgreSQL connection string |
 | `EMBEDDING_URL` | from config or `http://localhost:8090` | Embedding server endpoint (overrides config) |
-| `EMBEDDING_MODEL` | from config or `nomic-embed-text` | Model identifier (overrides config) |
+| `EMBEDDING_MODEL` | *(from preset)* | Model identifier (overrides config) |
 | `EMBEDDING_DIMS` | from config or `768` | Vector dimensions (overrides config) |
+| `EMBEDDING_PRESET` | `nomic` | Preset name (nomic, tei, qwen3, openai-small, etc.) |
 | `WATCH_PATHS` | *(none)* | Comma-separated directories to watch |
 | `ANTHROPIC_API_KEY` | *(none)* | Enables autonomous skill execution (optional) |
 
@@ -295,11 +308,14 @@ url = "postgresql://secondbrain:secondbrain@localhost:5432/secondbrain"
 paths = ["~/notes"]
 
 [embedding]
-provider = "tei"              # "tei" or "openai"
-url = "http://localhost:8090" # any TEI/OpenAI-compatible endpoint
-model = "BAAI/bge-base-en-v1.5"
-dimensions = 768
-batch_size = 32
+preset = "nomic"              # 9 presets: nomic, tei, qwen3, openai-small, etc.
+# Individual fields override the preset:
+# provider = "openai"         # "tei" or "openai" (Ollama uses openai protocol)
+# url = "http://localhost:11434"
+# model = "nomic-embed-text"
+# dimensions = 768
+# batch_size = 32
+# max_chunk_chars = 2400
 ```
 
 **Remote embedding servers** — set `embedding.url` to any TEI-compatible or OpenAI-compatible endpoint. Docker is optional if you have a remote server.
@@ -329,7 +345,7 @@ Options:
 | 1 — Core MCP Server | Done | 4 tools: search, read, list, ingest |
 | 2 — Embedding Pipeline | Done | Semantic search, related notes, embeddings |
 | 3 — Sync Engine | Done | File watcher, auto-sync, links, create/update |
-| 4 — Skills & Intelligence | Done | 5 skills, lifecycle, projects, file_search, 15 tools total |
-| 5 — Neovim Integration | Planned | Editor-native search, sync, linking |
-| 6 — Hosting | Planned | HTTP transport, multi-device access |
-| 7 — Extensibility | Planned | Plugin system, importers, webhooks |
+| 4 — Skills & Intelligence | Done | 5 skills, lifecycle, projects, file_search |
+| 5 — Deployment & Multi-user | Done | Docker, HTTP transport, git worktrees, edit stamping, 17 tools |
+| Next — Neovim Integration | Planned | Editor-native search, sync, linking |
+| Next — Extensibility | Planned | Plugin system, importers, webhooks |

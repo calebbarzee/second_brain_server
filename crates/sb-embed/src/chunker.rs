@@ -12,7 +12,7 @@ pub struct ChunkerConfig {
 impl Default for ChunkerConfig {
     fn default() -> Self {
         Self {
-            max_chunk_chars: 1500,  // ~375 tokens at ~4 chars/token
+            max_chunk_chars: 1500, // ~375 tokens at ~4 chars/token
             overlap_chars: 200,
         }
     }
@@ -54,8 +54,11 @@ impl Chunker {
                 chunk_index += 1;
             } else {
                 // Section too long — sliding window
-                let sub_chunks =
-                    sliding_window(&section.text, self.config.max_chunk_chars, self.config.overlap_chars);
+                let sub_chunks = sliding_window(
+                    &section.text,
+                    self.config.max_chunk_chars,
+                    self.config.overlap_chars,
+                );
                 for sub in sub_chunks {
                     chunks.push(CreateChunk {
                         note_id,
@@ -242,9 +245,15 @@ mod tests {
         let content = format!("# Title\n\n{long_text}");
 
         let chunks = chunker.chunk(note_id, &content);
-        assert!(chunks.len() > 1, "Long section should be split into multiple chunks");
+        assert!(
+            chunks.len() > 1,
+            "Long section should be split into multiple chunks"
+        );
         for chunk in &chunks {
-            assert!(chunk.content.len() <= 120, "Chunks should respect max size (with some tolerance)");
+            assert!(
+                chunk.content.len() <= 120,
+                "Chunks should respect max size (with some tolerance)"
+            );
         }
     }
 

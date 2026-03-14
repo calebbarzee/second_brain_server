@@ -26,22 +26,12 @@ impl OpenAiProvider {
 
     /// Create a provider pointing at OpenAI's API.
     pub fn openai(model: &str, dimensions: usize, api_key: String) -> Self {
-        Self::new(
-            "https://api.openai.com",
-            model,
-            dimensions,
-            Some(api_key),
-        )
+        Self::new("https://api.openai.com", model, dimensions, Some(api_key))
     }
 
     /// Create a provider pointing at a local Ollama instance.
     pub fn ollama(model: &str, dimensions: usize) -> Self {
-        Self::new(
-            "http://localhost:11434",
-            model,
-            dimensions,
-            None,
-        )
+        Self::new("http://localhost:11434", model, dimensions, None)
     }
 }
 

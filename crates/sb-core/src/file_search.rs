@@ -46,11 +46,7 @@ fn find_binary(names: &[&str]) -> Option<String> {
         if let Ok(output) = Command::new("which").arg(name).output()
             && output.status.success()
         {
-            return Some(
-                String::from_utf8_lossy(&output.stdout)
-                    .trim()
-                    .to_string(),
-            );
+            return Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
         }
     }
     None

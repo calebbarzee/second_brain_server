@@ -87,10 +87,7 @@ mod tests {
     #[test]
     fn test_normalize_absolute() {
         let mapper = PathMapper::new(PathBuf::from("/data/notes"));
-        assert_eq!(
-            mapper.normalize("/data/notes/todo.md"),
-            "todo.md"
-        );
+        assert_eq!(mapper.normalize("/data/notes/todo.md"), "todo.md");
     }
 
     #[test]
@@ -102,9 +99,6 @@ mod tests {
     #[test]
     fn test_normalize_outside_root() {
         let mapper = PathMapper::new(PathBuf::from("/data/notes"));
-        assert_eq!(
-            mapper.normalize("/other/path.md"),
-            "/other/path.md"
-        );
+        assert_eq!(mapper.normalize("/other/path.md"), "/other/path.md");
     }
 }

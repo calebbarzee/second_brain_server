@@ -2,11 +2,10 @@ use sqlx::PgPool;
 
 /// Get a setting value by key.
 pub async fn get_setting(pool: &PgPool, key: &str) -> anyhow::Result<Option<String>> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT value FROM settings WHERE key = $1")
-            .bind(key)
-            .fetch_optional(pool)
-            .await?;
+    let row: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = $1")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.map(|(v,)| v))
 }
 
@@ -43,13 +42,12 @@ pub async fn migrate_to_canonical_paths(pool: &PgPool, notes_root: &str) -> anyh
     let like_pattern = format!("{prefix}%");
 
     // Strip prefix from notes.file_path
-    let updated_notes = sqlx::query(
-        "UPDATE notes SET file_path = SUBSTR(file_path, $1) WHERE file_path LIKE $2",
-    )
-    .bind(prefix_len)
-    .bind(&like_pattern)
-    .execute(pool)
-    .await?;
+    let updated_notes =
+        sqlx::query("UPDATE notes SET file_path = SUBSTR(file_path, $1) WHERE file_path LIKE $2")
+            .bind(prefix_len)
+            .bind(&like_pattern)
+            .execute(pool)
+            .await?;
 
     // Strip prefix from links.target_path (only absolute ones)
     let updated_links = sqlx::query(

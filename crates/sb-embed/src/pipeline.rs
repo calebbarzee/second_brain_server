@@ -22,7 +22,11 @@ pub struct PipelineStats {
 }
 
 impl EmbeddingPipeline {
-    pub fn new(provider: Arc<dyn EmbeddingProvider>, batch_size: usize, chunker_config: ChunkerConfig) -> Self {
+    pub fn new(
+        provider: Arc<dyn EmbeddingProvider>,
+        batch_size: usize,
+        chunker_config: ChunkerConfig,
+    ) -> Self {
         Self {
             provider,
             chunker: Chunker::new(chunker_config),
@@ -89,10 +93,7 @@ impl EmbeddingPipeline {
     }
 
     /// Process all notes that have no embeddings for the current provider/model.
-    pub async fn process_unembedded(
-        &self,
-        pool: &PgPool,
-    ) -> anyhow::Result<PipelineStats> {
+    pub async fn process_unembedded(&self, pool: &PgPool) -> anyhow::Result<PipelineStats> {
         let mut stats = PipelineStats::default();
 
         // Find notes that have chunks without embeddings for our provider/model

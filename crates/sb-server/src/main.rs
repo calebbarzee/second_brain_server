@@ -125,11 +125,9 @@ async fn main() -> Result<()> {
     let main_mapper = PathMapper::new(notes_root.clone());
 
     // Run one-time migration to canonical (relative) paths
-    if let Err(e) = sb_core::db::settings::migrate_to_canonical_paths(
-        db.pool(),
-        &notes_root.to_string_lossy(),
-    )
-    .await
+    if let Err(e) =
+        sb_core::db::settings::migrate_to_canonical_paths(db.pool(), &notes_root.to_string_lossy())
+            .await
     {
         tracing::warn!("canonical path migration failed (non-fatal): {e}");
     }
@@ -203,9 +201,7 @@ async fn main() -> Result<()> {
     tracing::info!("tracked branch: {tracked_branch}");
 
     match cli.transport {
-        Transport::Stdio => {
-            run_stdio(db, pipeline, skill_runner, watch_paths, main_mapper).await
-        }
+        Transport::Stdio => run_stdio(db, pipeline, skill_runner, watch_paths, main_mapper).await,
         Transport::Http => {
             run_http(
                 db,
@@ -253,6 +249,7 @@ async fn run_stdio(
 }
 
 /// Run the MCP server over HTTP with Streamable HTTP transport (network-accessible).
+#[allow(clippy::too_many_arguments)]
 async fn run_http(
     db: sb_core::Database,
     pipeline: Arc<sb_embed::EmbeddingPipeline>,
@@ -264,7 +261,7 @@ async fn run_http(
     port: u16,
 ) -> Result<()> {
     use rmcp::transport::streamable_http_server::{
-        session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     };
     use tokio_util::sync::CancellationToken;
 

@@ -67,15 +67,14 @@ pub trait Skill: Send + Sync {
 }
 
 /// Registry of available skills.
+#[derive(Default)]
 pub struct SkillRegistry {
     skills: HashMap<String, Arc<dyn Skill>>,
 }
 
 impl SkillRegistry {
     pub fn new() -> Self {
-        Self {
-            skills: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Create a registry with all built-in skills.

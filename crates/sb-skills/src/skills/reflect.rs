@@ -30,9 +30,7 @@ impl Skill for ReflectSkill {
         ctx: &SkillContext,
         params: &SkillParams,
     ) -> anyhow::Result<SkillOutput> {
-        let period = time_period::parse_period(
-            params.period.as_deref().unwrap_or("this-week"),
-        )?;
+        let period = time_period::parse_period(params.period.as_deref().unwrap_or("this-week"))?;
 
         let project = if let Some(proj_name) = &params.project {
             ctx.resolve_project(proj_name).await?
@@ -55,9 +53,7 @@ impl Skill for ReflectSkill {
         for note in &period_notes {
             let parsed = markdown::parse_markdown(&note.raw_content);
             for task in &parsed.tasks {
-                *task_titles
-                    .entry(task.title.to_lowercase())
-                    .or_insert(0) += 1;
+                *task_titles.entry(task.title.to_lowercase()).or_insert(0) += 1;
                 let task_info = serde_json::json!({
                     "title": task.title,
                     "source": note.title,
@@ -75,19 +71,12 @@ impl Skill for ReflectSkill {
         let recurring: Vec<_> = task_titles
             .iter()
             .filter(|(_, count)| **count > 1)
-            .map(|(title, count)| {
-                serde_json::json!({"title": title, "occurrences": count})
-            })
+            .map(|(title, count)| serde_json::json!({"title": title, "occurrences": count}))
             .collect();
 
         // Find stale volatile notes (volatile notes not updated recently)
-        let stale_volatile = notes::get_notes_by_lifecycle(
-            ctx.db.pool(),
-            "volatile",
-            project_id,
-            50,
-        )
-        .await?;
+        let stale_volatile =
+            notes::get_notes_by_lifecycle(ctx.db.pool(), "volatile", project_id, 50).await?;
         let stale_threshold = chrono::Utc::now() - chrono::Duration::days(30);
         let stale_notes: Vec<_> = stale_volatile
             .iter()
@@ -184,7 +173,9 @@ impl Skill for ReflectSkill {
             }
             std::fs::write(&note_path, &content)?;
             let mapper = sb_core::PathMapper::new(ctx.notes_root.clone());
-            sb_core::ingest::ingest_file(&ctx.db, &note_path, &mapper).await.ok();
+            sb_core::ingest::ingest_file(&ctx.db, &note_path, &mapper)
+                .await
+                .ok();
 
             output
                 .notes_created
