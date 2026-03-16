@@ -270,7 +270,7 @@ fn serialize_frontmatter(value: &serde_json::Value) -> String {
 ///
 /// # Arguments
 /// - `raw_content`: the full note markdown (may or may not have frontmatter)
-/// - `editor`: who made the edit — `"ai"` or a username like `"calebbarzee"`
+/// - `editor`: who made the edit — `"ai"` or a username like `"alice"`
 ///
 /// # Frontmatter fields set
 /// - `edited_by: <editor>`
@@ -419,19 +419,19 @@ mod tests {
     #[test]
     fn test_stamp_edit_human() {
         let raw = "# Note\n\nContent.\n";
-        let stamped = stamp_edit(raw, "calebbarzee");
-        assert!(stamped.contains("edited_by: calebbarzee"));
-        assert!(stamped.contains("last_calebbarzee_edit:"));
+        let stamped = stamp_edit(raw, "alice");
+        assert!(stamped.contains("edited_by: alice"));
+        assert!(stamped.contains("last_alice_edit:"));
         assert!(stamped.contains("# Note"));
     }
 
     #[test]
     fn test_stamp_edit_preserves_other_editor_timestamps() {
         let raw = "---\nedited_by: ai\nlast_ai_edit: 2026-01-01T00:00:00Z\n---\n\n# Note\n";
-        let stamped = stamp_edit(raw, "calebbarzee");
+        let stamped = stamp_edit(raw, "alice");
         // Should update edited_by to human, add human timestamp, keep AI timestamp
-        assert!(stamped.contains("edited_by: calebbarzee"));
-        assert!(stamped.contains("last_calebbarzee_edit:"));
+        assert!(stamped.contains("edited_by: alice"));
+        assert!(stamped.contains("last_alice_edit:"));
         assert!(stamped.contains("last_ai_edit: 2026-01-01"));
     }
 

@@ -180,13 +180,13 @@ pub struct FileSearchParams {
 pub struct NoteStampParams {
     /// File path of the note to stamp
     pub file_path: String,
-    /// Who made the edit — your username (e.g. "calebbarzee") or "ai"
+    /// Who made the edit — your username (e.g. "alice") or "ai"
     pub editor: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SessionInitParams {
-    /// Your username (e.g. "calebbarzee"). Used for branch prefix and edit attribution.
+    /// Your username (e.g. "alice"). Used for branch prefix and edit attribution.
     pub username: String,
     /// Your email address (for git commits)
     pub email: String,

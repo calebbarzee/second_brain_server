@@ -20,55 +20,51 @@ You ask a question  <--  MCP returns results  <--  DB stores notes + vectors
 
 1. **You write** plain markdown files. No required frontmatter or naming convention.
 2. **The file watcher** detects changes within 300ms, parses the file, and upserts it into PostgreSQL. Links (`[[wikilinks]]` and `[markdown](links)`) are extracted into a traversable graph.
-3. **The embedding pipeline** chunks notes by heading sections, sends chunks to your embedding provider, and stores vectors in pgvector with an HNSW index.
+3. **The embedding pipeline** chunks notes by heading sections, sends chunks to Ollama, and stores vectors in pgvector with an HNSW index.
 4. **17 MCP tools** expose everything to your AI assistant — search, read, create, update, link traversal, semantic similarity, project context, edit tracking, multi-user sessions, and composable skills.
 
 The database is a derived index, not the source of truth. If it disappears, re-ingest and you're back.
 
-## Features
-
-- **Full-text + semantic search** — keyword matching via PostgreSQL tsvector, conceptual search via vector similarity. A note about "turn interpolation" surfaces when you ask about "smoothing aircraft trajectories."
-- **Auto-sync** — file watcher detects changes and re-indexes/re-embeds automatically. Edit in your editor, save, done.
-- **Link graph** — extracts `[[wikilinks]]` and `[markdown links]()`, resolves targets, traverses connections in both directions.
-- **Skill engine** — composable workflows: summarize your week, reflect on patterns, find cross-project connections, auto-tag and classify notes.
-- **Note lifecycle** — classify notes as active, volatile, enduring, or archived. Filter search results by lifecycle stage.
-- **Project awareness** — auto-detect projects from file paths, fuzzy match against known projects, get comprehensive project context.
-- **Filesystem search** — search files directly via ripgrep/fd, even without the database or for non-ingested files.
-- **Pluggable embeddings** — local models via Docker (TEI) or Ollama, cloud via OpenAI. Swap providers without touching application code.
-
 ## Quick start
 
-The easiest way to get running is the interactive setup script:
+The entire stack — the app, PostgreSQL, and Ollama — runs in Docker. Nothing besides Docker needs to be installed on the host.
+
+### 1. Deploy
 
 ```bash
-./setup.sh
+./deploy.sh              # Interactive setup
+./deploy.sh --defaults   # Deploy with sensible defaults (no prompts)
 ```
 
-This walks you through prerequisites, configuration, building, initial ingestion, and MCP registration. It's idempotent — safe to re-run.
+This builds the app container, starts PostgreSQL + Ollama, pulls the embedding model, ingests your notes, and runs the initial embedding. The MCP server is exposed at `http://localhost:8080/mcp`.
 
-### Manual setup
-
-If you prefer to do it step by step:
+### 2. Register with Claude Code
 
 ```bash
-# 1. Start PostgreSQL + embedding server
-docker compose up -d
-
-# 2. Build
-cargo build --release
-
-# 3. Register with Claude Code
-claude mcp add second-brain \
-  -e DATABASE_URL=postgresql://secondbrain:secondbrain@localhost:5432/secondbrain \
-  -e EMBEDDING_PRESET=nomic \
-  -e WATCH_PATHS=$HOME/notes \
-  -- $(pwd)/target/release/second-brain
-
-# 4. Ingest your notes
-./target/release/sb ingest ~/notes
+claude mcp add second-brain --type http --url http://localhost:8080/mcp -s user
 ```
 
-Then start a Claude Code session and try: *"Search my notes for signal processing"*
+That's it. Claude Code talks to the HTTP endpoint; the server handles database and embedding calls internally.
+
+### 3. Use it
+
+Start a Claude Code session and try:
+
+- *"Search my notes for signal processing"*
+- *"What notes are related to my current project?"*
+- *"Create a note summarizing today's work"*
+- *"Summarize what I worked on this week"*
+
+### Manage the stack
+
+```bash
+./deploy.sh status       # Show running services
+./deploy.sh logs [svc]   # Tail logs
+./deploy.sh ingest       # Re-ingest notes
+./deploy.sh embed        # Re-run embeddings
+./deploy.sh down         # Stop all services (data volumes preserved)
+./deploy.sh down -v      # Stop and delete all data
+```
 
 ## MCP tools
 
@@ -109,6 +105,14 @@ Then start a Claude Code session and try: *"Search my notes for signal processin
 | `project_list` | List projects with note counts |
 | `project_context` | Get comprehensive context for a project |
 
+### When to use which search
+
+- **`note_search`** — You know the words. "Find my notes about git CLI."
+- **`semantic_search`** — You know the concept. "What have I written about radio frequency interference?" will match notes about signal processing, blind signal detection, and RF analysis even if they don't use that exact phrase.
+- **`find_related`** — You have a note and want context. "What else connects to this architecture doc?"
+- **`note_graph`** — You want structure. "What links to and from this note?"
+- **`file_search`** — DB search missed? Files not ingested yet? Searches the raw filesystem.
+
 ## Skills
 
 Skills are composable workflows that operate over your knowledge base:
@@ -123,6 +127,64 @@ Skills are composable workflows that operate over your knowledge base:
 
 Skills work interactively through your MCP client (no API key needed) or autonomously with an `ANTHROPIC_API_KEY`.
 
+## Configuration
+
+### Embedding models
+
+All embedding models run locally via Ollama inside the Docker stack. Choose a model during `./deploy.sh` setup or set `EMBEDDING_PRESET` in `.env.prod`:
+
+| Preset | Model | Dimensions | Size | Notes |
+|--------|-------|-----------|------|-------|
+| `nomic` | nomic-embed-text | 768 | 137 MB | **Default.** Fast, good quality. |
+| `all-minilm` | all-minilm | 384 | 46 MB | Fastest, smallest. |
+| `snowflake` | snowflake-arctic-embed2 | 768 | 305 MB | Good balance. |
+| `mxbai` | mxbai-embed-large | 1024 | 335 MB | High quality, larger vectors. |
+| `qwen3` | qwen3-embedding | 1024 | 4.7 GB | Best quality. Slow on CPU. |
+
+### Environment variables (.env.prod)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POSTGRES_PASSWORD` | `secondbrain` | Database password |
+| `EMBEDDING_PRESET` | `nomic` | Ollama model preset (see table above) |
+| `OLLAMA_MODEL` | `nomic-embed-text` | Ollama model to pull (matches preset) |
+| `MCP_PORT` | `8080` | Host port for the MCP HTTP endpoint |
+| `NOTES_PATH` | `./notes-data` | Host path to your notes directory (bind-mounted into container) |
+| `RUST_LOG` | `info` | Log level (debug/info/warn/error) |
+| `GIT_USER_NAME` | `secondbrain` | Git identity for note commits (human) |
+| `AI_GIT_NAME` | `claude-ai` | Git identity for AI-authored commits |
+| `AI_GIT_EMAIL` | `ai@second-brain.local` | Git email for AI-authored commits |
+| `ANTHROPIC_API_KEY` | *(none)* | Enables autonomous skill execution (optional) |
+
+PostgreSQL and Ollama run on the internal Docker network only — they are not exposed to the host. The only host-exposed port is the MCP server.
+
+### Notes directory
+
+Your notes are bind-mounted into the container at `/data/notes`. Point `NOTES_PATH` at any directory of markdown files. `deploy.sh` also supports cloning a git repository as the notes source.
+
+If you use git-backed notes, the container auto-initializes the repo and tracks the configured branch. Push/pull via `./deploy.sh push` and `./deploy.sh pull`.
+
+### Config file (second-brain.toml)
+
+The Docker entrypoint auto-generates this from environment variables. For local development, you can write one manually:
+
+```toml
+[database]
+url = "postgresql://secondbrain:secondbrain@localhost:5432/secondbrain"
+
+[notes]
+paths = ["~/notes"]
+
+[embedding]
+preset = "nomic"
+# Individual fields override the preset:
+# url = "http://localhost:11434"
+# model = "nomic-embed-text"
+# dimensions = 768
+# batch_size = 32
+# max_chunk_chars = 2400
+```
+
 ## Architecture
 
 ```
@@ -131,8 +193,8 @@ second-brain (Cargo workspace)
 |-- sb-core       Shared foundation: models, DB queries, markdown parser,
 |                 ingestion pipeline, file search. Everything depends on this.
 |
-|-- sb-embed      Embedding pipeline: pluggable providers (TEI, OpenAI/Ollama),
-|                 markdown chunker, batch processor.
+|-- sb-embed      Embedding pipeline: pluggable providers, markdown chunker,
+|                 batch processor.
 |
 |-- sb-sync       File watcher (notify v7) + sync processor. Detects file
 |                 changes, ingests, embeds. Runs as a background tokio task.
@@ -146,93 +208,67 @@ second-brain (Cargo workspace)
 |-- sb-cli        CLI for manual ingestion, search, embedding, and skills.
 ```
 
-### Embedding providers
+For deeper architecture details (data flow, embedding strategy, link resolution, database schema), see [docs/architecture.md](docs/architecture.md).
 
-The embedding pipeline is provider-agnostic. Configure via `second-brain.toml` or environment variables:
+## Development
 
-| Provider | Model | Dimensions | Notes |
-|----------|-------|-----------|-------|
-| `ollama` (default) | nomic-embed-text | 768 | Local via Ollama, fast on CPU |
-| `tei` | BAAI/bge-base-en-v1.5 | 768 | Runs locally via Docker, no API key |
-| `openai` | text-embedding-3-small | 1536 | Cloud, requires API key |
+For local development without Docker (building from source):
 
-You can also point at any TEI-compatible or OpenAI-compatible remote endpoint — Docker is optional if you have a remote embedding server.
+```bash
+# Start just the database
+docker compose up -d db
 
-Nine presets are available: `nomic`, `nomic-moe`, `all-minilm`, `snowflake`, `mxbai`, `qwen3`, `openai-small`, `openai-large`, `tei`. Set via `embedding.preset` in the config file or `EMBEDDING_PRESET` env var. Individual fields override the preset.
+# Start Ollama on the host (or use docker compose up -d ollama from the dev compose)
+ollama serve &
+ollama pull nomic-embed-text
 
-### Transport modes
+# Build
+cargo build --release
 
-| Mode | Use case | Command |
-|------|----------|---------|
-| `stdio` (default) | Local MCP client (Claude Code, Neovim) | `second-brain` |
-| `http` | Network access, multi-device, Docker | `second-brain --transport http --port 8080` |
+# Run the MCP server (stdio mode for Claude Code)
+./target/release/second-brain
 
-HTTP transport uses MCP Streamable HTTP at `/mcp`, with stateful sessions via `Mcp-Session-Id` header. Multi-user editing is supported through git worktrees — each session gets an isolated branch via the `session_init` tool.
+# Or HTTP mode
+./target/release/second-brain --transport http --port 8080
+```
 
-## Configuration
+Dev commands via justfile:
 
-Configuration is read from `second-brain.toml` (generated by `setup.sh`) or environment variables. Environment variables take precedence.
+```bash
+just db-up        # start postgres
+just db-down      # stop services
+just db-reset     # wipe and recreate the database
+just test         # run all tests
+just ci           # fmt + clippy + test
+just server       # run MCP server in dev mode
+```
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | `postgresql://secondbrain:secondbrain@localhost:5432/secondbrain` | PostgreSQL connection string |
-| `EMBEDDING_PRESET` | `nomic` | Preset name (see embedding providers table) |
-| `EMBEDDING_URL` | *(from preset)* | Embedding server endpoint (override) |
-| `EMBEDDING_MODEL` | *(from preset)* | Model identifier (override) |
-| `EMBEDDING_DIMS` | *(from preset)* | Vector dimensions (override) |
-| `EMBEDDING_PROVIDER` | *(from preset)* | Provider: `tei`, `ollama`, or `openai` (override) |
-| `WATCH_PATHS` | *(auto-detect)* | Comma-separated directories to watch |
-| `ANTHROPIC_API_KEY` | *(none)* | Enables autonomous skill execution |
-
-If no watch paths are configured, the server searches `$HOME` up to 2 directories deep for any directory named `notes`.
-
-## Prerequisites
-
-- **Rust 1.88+** (1.93+ recommended) — `rustup update stable`
-- **Docker & Docker Compose** — for local PostgreSQL + embeddings (optional with remote servers)
-- **ripgrep** (`rg`) — for `file_search` content search (recommended; falls back to grep)
-- **fd** — for `file_search` filename search (optional; falls back to find)
+The interactive `setup.sh` script can also walk through local setup, but Docker deployment via `deploy.sh` is the primary supported path.
 
 ## CLI
 
-The CLI binary is called `sb`. You can either install it to your PATH or run it directly from the build output:
+The `sb` CLI is available inside the container via `./deploy.sh cli`, or built locally with `cargo build --release -p sb-cli`:
 
 ```bash
-# Option A: Install to PATH
-cargo install --path crates/sb-cli
+# Via deploy.sh (runs inside container)
+./deploy.sh cli search "signal processing"
+./deploy.sh cli semantic "radio frequency"
+./deploy.sh cli skill summarize --period this-week
 
-# Option B: Run from build output
-cargo build --release -p sb-cli
-./target/release/sb <command>
-```
-
-```bash
-# Search notes
+# Or locally
 sb search "signal processing"
-
-# Semantic search
 sb semantic "radio frequency interference"
-
-# Ingest a directory
 sb ingest ~/notes
-
-# Embed unembedded notes
 sb embed
-
-# Run a skill
 sb skill summarize --period this-week
-
-# List projects
 sb projects
-
-# Classify a note
 sb classify ~/notes/TODO.md volatile
 ```
 
 ## Further reading
 
-- **[GUIDE.md](GUIDE.md)** — detailed usage guide with architecture diagrams, search strategy advice, and configuration reference
-- **[ROADMAP.md](ROADMAP.md)** — future plans: Neovim integration, hosting/multi-device, extensibility
+- **[docs/architecture.md](docs/architecture.md)** — Database schema, data flow, embedding strategy, link resolution
+- **[ROADMAP.md](ROADMAP.md)** — Future plans and reference projects
 
 ## License
 

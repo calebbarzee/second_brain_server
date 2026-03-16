@@ -15,4 +15,4 @@ setup-cron.sh
 test-e2e*.sh
 justfile
 ROADMAP.md
-GUIDE.md
+docs/

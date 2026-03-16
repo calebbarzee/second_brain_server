@@ -7,8 +7,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-secondbrain}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secondbrain}
       POSTGRES_DB: ${POSTGRES_DB:-secondbrain}
-    ports:
-      - "${DB_PORT:-5432}:5432"
+    # No host port — only accessible from other containers on the internal network
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -21,8 +20,7 @@ services:
     image: ollama/ollama:latest
     container_name: secondbrain-ollama
     restart: unless-stopped
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
+    # No host port — only accessible from other containers on the internal network
     volumes:
       - ollama-models:/root/.ollama
     healthcheck:
@@ -47,7 +45,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-secondbrain}:${POSTGRES_PASSWORD:-secondbrain}@db:5432/${POSTGRES_DB:-secondbrain}
       WATCH_PATHS: /data/notes
       EMBEDDING_PRESET: ${EMBEDDING_PRESET:-nomic}
-      EMBEDDING_URL: http://ollama:11434
+      EMBEDDING_URL: ${EMBEDDING_URL:-http://ollama:11434}
       RUST_LOG: ${RUST_LOG:-info}
       MCP_TRANSPORT: http
       MCP_HOST: 0.0.0.0

@@ -696,10 +696,10 @@ def _(c: McpClient):
 @test("Note CRUD", "note_stamp: tag human edit")
 def _(c: McpClient):
     ensure_session(c)
-    r = c.call_tool("note_stamp", {"file_path": CREATED_NOTE, "editor": "calebbarzee"})
+    r = c.call_tool("note_stamp", {"file_path": CREATED_NOTE, "editor": "testuser"})
     if r.is_error:
         return f"error: {r.text}"
-    if "calebbarzee" not in r.text:
+    if "testuser" not in r.text:
         return f"expected editor name in response: {r.text[:80]}"
 
 

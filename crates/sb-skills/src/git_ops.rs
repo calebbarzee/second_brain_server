@@ -9,13 +9,13 @@
 //!
 //! ```text
 //! main                         ← protected, never committed to directly
-//!   └─ calebbarzee/weekly      ← user's working branch
-//!        ├─ human commit        (git config user.name = calebbarzee)
+//!   └─ alice/weekly      ← user's working branch
+//!        ├─ human commit        (git config user.name = alice)
 //!        ├─ AI commit           (git config user.name = claude-ai)
 //!        └─ human commit
 //! ```
 //!
-//! - The user checks out their branch before starting work (e.g. `calebbarzee/research`).
+//! - The user checks out their branch before starting work (e.g. `alice/research`).
 //! - AI edits are committed to that same branch with the AI author identity.
 //! - Protected branches (`main`, `master`, `staging`, `dev`) are never written to.
 //! - The branch must be prefixed with the repo's `user.name` from git config.
