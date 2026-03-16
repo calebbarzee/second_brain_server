@@ -22,6 +22,7 @@ git config --global --add safe.directory "${WATCH_PATHS}" 2>/dev/null || true
 # AI commits use --author override, so user.name is always the human.
 git config --global user.name "${GIT_USER_NAME:-secondbrain}" 2>/dev/null || true
 git config --global user.email "${GIT_USER_EMAIL:-user@second-brain.local}" 2>/dev/null || true
+
 # Init git repo in notes dir if not already one
 if [ -d "${WATCH_PATHS}" ] && ! git -C "${WATCH_PATHS}" rev-parse --git-dir >/dev/null 2>&1; then
     echo "Initializing git repo in ${WATCH_PATHS}..."

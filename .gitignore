@@ -26,3 +26,6 @@ pgdata/
 
 # Test data
 test-notes/
+
+# Cloned notes repo (created by deploy.sh)
+notes-data/

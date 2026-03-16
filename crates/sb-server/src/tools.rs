@@ -1186,6 +1186,19 @@ impl SecondBrainServer {
         &self,
         Parameters(params): Parameters<NoteStampParams>,
     ) -> Result<CallToolResult, McpError> {
+        // Validate editor to prevent YAML frontmatter injection
+        if params.editor.is_empty()
+            || params.editor.len() > 50
+            || !params
+                .editor
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Invalid editor: must be 1-50 alphanumeric characters, hyphens, or underscores",
+            )]));
+        }
+
         let _session = self.require_session()?;
         let mapper = self.active_mapper();
         let path = mapper.to_absolute(&params.file_path);

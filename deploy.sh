@@ -9,6 +9,8 @@
 #   ./deploy.sh logs [svc]   # Tail logs (optionally for one service)
 #   ./deploy.sh ingest       # Run one-shot note ingestion
 #   ./deploy.sh embed        # Run one-shot embedding pipeline
+#   ./deploy.sh push         # Push notes repo to remote (uses host git credentials)
+#   ./deploy.sh pull         # Pull latest notes from remote
 #   ./deploy.sh cli <args>   # Run sb CLI inside the container
 
 set -euo pipefail
@@ -68,6 +70,7 @@ configure() {
     local embedding_preset="nomic"
     local ollama_model="nomic-embed-text"
     local notes_path="${HOME}/2_resources/notes"
+    local git_notes_repo=""
     local log_level="info"
 
     if [ "$defaults" = "false" ]; then
@@ -75,18 +78,42 @@ configure() {
         echo -e "${BOLD}${CYAN}── Second Brain Deploy Configuration ──${NC}"
         echo ""
 
-        # Notes path
-        read -rp "Notes directory [$notes_path]: " input
-        notes_path="${input:-$notes_path}"
+        # Notes source: local directory or git repo
+        echo "Notes source:"
+        echo "  1) Local directory (bind mount)"
+        echo "  2) Git repository (cloned to ./notes-data on host)"
+        read -rp "Choose [1]: " notes_source
+        case "${notes_source:-1}" in
+            2)
+                read -rp "Git repo URL: " git_notes_repo
+                if [ -z "$git_notes_repo" ]; then
+                    err "Git repo URL is required"
+                    exit 1
+                fi
+                notes_path="$(pwd)/notes-data"
+                if [ -d "$notes_path/.git" ]; then
+                    ok "Repo already cloned at $notes_path — pulling latest..."
+                    git -C "$notes_path" pull --ff-only || warn "Pull failed; using existing checkout"
+                else
+                    info "Cloning ${git_notes_repo} → $notes_path (uses your host SSH/git credentials)..."
+                    git clone "$git_notes_repo" "$notes_path"
+                    ok "Cloned notes repo to $notes_path"
+                fi
+                ;;
+            *)
+                read -rp "Notes directory [$notes_path]: " input
+                notes_path="${input:-$notes_path}"
 
-        if [ ! -d "$notes_path" ]; then
-            warn "Directory '$notes_path' does not exist."
-            read -rp "Create it? [Y/n]: " create
-            if [[ "${create:-Y}" =~ ^[Yy] ]]; then
-                mkdir -p "$notes_path"
-                ok "Created $notes_path"
-            fi
-        fi
+                if [ ! -d "$notes_path" ]; then
+                    warn "Directory '$notes_path' does not exist."
+                    read -rp "Create it? [Y/n]: " create
+                    if [[ "${create:-Y}" =~ ^[Yy] ]]; then
+                        mkdir -p "$notes_path"
+                        ok "Created $notes_path"
+                    fi
+                fi
+                ;;
+        esac
 
         # DB password
         read -rp "Database password [secondbrain]: " input
@@ -252,6 +279,8 @@ show_status() {
     echo -e "  ${CYAN}./deploy.sh ingest${NC}              — Re-ingest notes"
     echo -e "  ${CYAN}./deploy.sh embed${NC}               — Re-run embeddings"
     echo -e "  ${CYAN}./deploy.sh cli search \"query\"${NC}  — Search via CLI"
+    echo -e "  ${CYAN}./deploy.sh push${NC}                — Push notes repo to remote"
+    echo -e "  ${CYAN}./deploy.sh pull${NC}                — Pull latest from remote"
     echo -e "  ${CYAN}./deploy.sh down${NC}                — Stop all services"
     echo ""
 }
@@ -298,6 +327,34 @@ main() {
             shift
             compose exec -T app sb "$@"
             ;;
+        push)
+            if [ -f "$ENV_FILE" ]; then
+                # shellcheck disable=SC1090
+                source "$ENV_FILE"
+            fi
+            local np="${NOTES_PATH:-./notes-data}"
+            if [ ! -d "$np/.git" ]; then
+                err "No git repo found at $np"
+                exit 1
+            fi
+            info "Pushing notes from $np..."
+            git -C "$np" push
+            ok "Push complete."
+            ;;
+        pull)
+            if [ -f "$ENV_FILE" ]; then
+                # shellcheck disable=SC1090
+                source "$ENV_FILE"
+            fi
+            local np="${NOTES_PATH:-./notes-data}"
+            if [ ! -d "$np/.git" ]; then
+                err "No git repo found at $np"
+                exit 1
+            fi
+            info "Pulling latest notes into $np..."
+            git -C "$np" pull --ff-only
+            ok "Pull complete."
+            ;;
         --defaults)
             check_prereqs
             configure true
@@ -309,7 +366,7 @@ main() {
             deploy
             ;;
         *)
-            echo "Usage: $0 [deploy|down|status|logs [svc]|ingest|embed|cli <args>|--defaults]"
+            echo "Usage: $0 [deploy|down|status|logs [svc]|ingest|embed|push|pull|cli <args>|--defaults]"
             exit 1
             ;;
     esac
