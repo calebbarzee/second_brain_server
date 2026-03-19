@@ -5,17 +5,19 @@
 //!
 //! # Branch model
 //!
-//! Users and AI agents work together on the user's branch:
+//! Users and AI agents work together on date-stamped branches:
 //!
 //! ```text
-//! main                         ← protected, never committed to directly
-//!   └─ alice/weekly      ← user's working branch
-//!        ├─ human commit        (git config user.name = alice)
-//!        ├─ AI commit           (git config user.name = claude-ai)
+//! main                                    ← protected, never committed to directly
+//!   └─ alice/2026-03-18/working           ← default session branch (date-stamped)
+//!        ├─ human commit                  (git config user.name = alice)
+//!        ├─ AI commit                     (git config user.name = claude-ai)
 //!        └─ human commit
+//!   └─ alice/2026-03-18/notes_on_bees     ← custom topic branch
 //! ```
 //!
-//! - The user checks out their branch before starting work (e.g. `alice/research`).
+//! - Default branch: `<username>/<YYYY-MM-DD>/working` (auto-generated per session).
+//! - Custom branches: `<username>/<date>/<topic>` (user-specified).
 //! - AI edits are committed to that same branch with the AI author identity.
 //! - Protected branches (`main`, `master`, `staging`, `dev`) are never written to.
 //! - The branch must be prefixed with the repo's `user.name` from git config.
@@ -23,11 +25,9 @@
 //!
 //! After a work session the user reviews and merges to main via PR or manual merge.
 
+use sb_core::worktree::PROTECTED_BRANCHES;
 use std::path::Path;
 use std::process::Command;
-
-/// Branches that must never be committed to directly.
-const PROTECTED_BRANCHES: &[&str] = &["main", "master", "staging", "dev"];
 
 /// Create a snapshot commit of all changes in the notes directory.
 /// Returns the commit SHA on success.
@@ -246,4 +246,229 @@ pub fn is_git_repo(path: &Path) -> bool {
         .current_dir(path)
         .output()
         .is_ok_and(|o| o.status.success())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    /// Create a temp git repo on a user-owned branch, ready for testing.
+    fn init_repo_on_branch(dir: &Path, user: &str, branch: &str) {
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(dir)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.name", user])
+            .current_dir(dir)
+            .output()
+            .expect("git config user.name");
+        Command::new("git")
+            .args(["config", "user.email", &format!("{user}@test.com")])
+            .current_dir(dir)
+            .output()
+            .expect("git config user.email");
+        std::fs::write(dir.join("README.md"), "# test\n").unwrap();
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(dir)
+            .output()
+            .expect("git commit");
+        Command::new("git")
+            .args(["checkout", "-b", branch])
+            .current_dir(dir)
+            .output()
+            .expect("git checkout -b");
+    }
+
+    #[test]
+    fn is_git_repo_true() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_on_branch(tmp.path(), "alice", "alice/work");
+        assert!(is_git_repo(tmp.path()));
+    }
+
+    #[test]
+    fn is_git_repo_false() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!is_git_repo(tmp.path()));
+    }
+
+    #[test]
+    fn current_branch_returns_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_on_branch(tmp.path(), "alice", "alice/2026-03-18/working");
+        assert_eq!(
+            current_branch(tmp.path()).unwrap(),
+            "alice/2026-03-18/working"
+        );
+    }
+
+    #[test]
+    fn git_username_returns_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_on_branch(tmp.path(), "alice", "alice/work");
+        assert_eq!(git_username(tmp.path()).unwrap(), "alice");
+    }
+
+    #[test]
+    fn is_clean_on_fresh_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_on_branch(tmp.path(), "alice", "alice/work");
+        assert!(is_clean(tmp.path()).unwrap());
+    }
+
+    #[test]
+    fn is_clean_false_with_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_on_branch(tmp.path(), "alice", "alice/work");
+        std::fs::write(tmp.path().join("dirty.md"), "change").unwrap();
+        assert!(!is_clean(tmp.path()).unwrap());
+    }
+
+    #[test]
+    fn validate_branch_rejects_protected() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Stay on main (don't switch to user branch)
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "alice"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "a@t.com"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::fs::write(tmp.path().join("README.md"), "# t\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+
+        let err = validate_branch(tmp.path(), "alice").unwrap_err();
+        assert!(
+            err.to_string().contains("protected"),
+            "expected protected error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_branch_rejects_wrong_owner() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_on_branch(tmp.path(), "alice", "bob/sneaky");
+        let err = validate_branch(tmp.path(), "alice").unwrap_err();
+        assert!(
+            err.to_string().contains("not owned by"),
+            "expected owner error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_branch_accepts_valid() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_on_branch(tmp.path(), "alice", "alice/2026-03-18/working");
+        let branch = validate_branch(tmp.path(), "alice").unwrap();
+        assert_eq!(branch, "alice/2026-03-18/working");
+    }
+
+    #[test]
+    fn snapshot_commit_and_diff() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_on_branch(tmp.path(), "alice", "alice/work");
+
+        // Clean repo — snapshot should return None
+        assert!(snapshot_commit(tmp.path(), "nothing").unwrap().is_none());
+
+        // Make a change and snapshot
+        std::fs::write(tmp.path().join("note.md"), "# Hello\n").unwrap();
+        let sha = snapshot_commit(tmp.path(), "add note")
+            .unwrap()
+            .expect("should have a commit");
+        assert!(!sha.is_empty());
+        assert!(is_clean(tmp.path()).unwrap());
+    }
+
+    #[test]
+    fn commit_file_single_file_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_on_branch(tmp.path(), "alice", "alice/work");
+
+        // Create two files but only commit one
+        std::fs::write(tmp.path().join("a.md"), "file a").unwrap();
+        std::fs::write(tmp.path().join("b.md"), "file b").unwrap();
+
+        let result = commit_file(
+            tmp.path(),
+            Path::new("a.md"),
+            "ai: create a.md",
+            "alice",
+            "claude-ai",
+            "ai@test.local",
+        )
+        .unwrap()
+        .expect("should commit");
+
+        assert_eq!(result.0, "alice/work");
+        assert!(!result.1.is_empty());
+
+        // b.md should still be untracked
+        let output = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        let status = String::from_utf8_lossy(&output.stdout);
+        assert!(status.contains("b.md"), "b.md should still be untracked");
+        assert!(
+            !status.contains("a.md"),
+            "a.md should be committed and clean"
+        );
+
+        // Verify AI author
+        let output = Command::new("git")
+            .args(["log", "-1", "--format=%an"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        let author = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(author, "claude-ai");
+    }
+
+    #[test]
+    fn commit_file_nothing_to_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_on_branch(tmp.path(), "alice", "alice/work");
+
+        // Commit README.md which is already committed — nothing to stage
+        let result = commit_file(
+            tmp.path(),
+            Path::new("README.md"),
+            "ai: no-op",
+            "alice",
+            "claude-ai",
+            "ai@test.local",
+        )
+        .unwrap();
+
+        assert!(result.is_none(), "should be None when nothing to commit");
+    }
 }

@@ -190,7 +190,7 @@ pub struct SessionInitParams {
     pub username: String,
     /// Your email address (for git commits)
     pub email: String,
-    /// Branch name to work on (default: "<username>/working"). Must be prefixed with your username.
+    /// Branch name to work on (default: "<username>/<YYYY-MM-DD>/working"). Must be prefixed with your username.
     #[serde(default)]
     pub branch: Option<String>,
 }
@@ -1231,24 +1231,24 @@ impl SecondBrainServer {
     }
 
     #[tool(
-        description = "Initialize your editing session with an isolated git worktree. Must be called before using write tools (note_create, note_update, note_stamp). Read-only tools (search, list, read) work without a session. Creates or checks out a branch named '<username>/working' by default."
+        description = "Initialize your editing session with an isolated git worktree. Must be called before using write tools (note_create, note_update, note_stamp). Read-only tools (search, list, read) work without a session. Creates or checks out a branch named '<username>/<YYYY-MM-DD>/working' by default."
     )]
     async fn session_init(
         &self,
         Parameters(params): Parameters<SessionInitParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Check if session already active
-        {
-            let session = self.session.lock().unwrap();
-            if let Some(existing) = session.as_ref() {
-                return Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Session already active:\n  User: {} <{}>\n  Branch: {}\n  Worktree: {}",
-                    existing.username,
-                    existing.email,
-                    existing.branch,
-                    existing.worktree_path.display()
-                ))]));
-            }
+        // Hold the lock for the entire operation to prevent TOCTOU races
+        // where two concurrent requests both pass the "already active" check.
+        let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
+
+        if let Some(existing) = session.as_ref() {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Session already active:\n  User: {} <{}>\n  Branch: {}\n  Worktree: {}",
+                existing.username,
+                existing.email,
+                existing.branch,
+                existing.worktree_path.display()
+            ))]));
         }
 
         let config = self.worktree_config.as_ref().ok_or_else(|| {
@@ -1277,7 +1277,7 @@ impl SecondBrainServer {
             info.worktree_path.display()
         );
 
-        *self.session.lock().unwrap() = Some(info);
+        *session = Some(info);
 
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
@@ -1312,7 +1312,7 @@ impl SecondBrainServer {
     /// Returns the PathMapper for the active context:
     /// session worktree if initialized, main repo otherwise.
     fn active_mapper(&self) -> PathMapper {
-        let session = self.session.lock().unwrap();
+        let session = self.session.lock().unwrap_or_else(|e| e.into_inner());
         match session.as_ref() {
             Some(info) => PathMapper::new(info.worktree_path.clone()),
             None => self.main_mapper.clone(),
@@ -1321,7 +1321,7 @@ impl SecondBrainServer {
 
     /// Returns session info or an error for tools that require an active session.
     fn require_session(&self) -> Result<SessionInfo, McpError> {
-        let session = self.session.lock().unwrap();
+        let session = self.session.lock().unwrap_or_else(|e| e.into_inner());
         session.clone().ok_or_else(|| {
             McpError::invalid_params(
                 "No active session. Call session_init first with your username and email.",
@@ -1332,7 +1332,7 @@ impl SecondBrainServer {
 
     /// Commit a single AI-authored file to the session's branch.
     fn git_commit_file(&self, file_path: &Path, message: &str) -> Option<(String, String)> {
-        let session = self.session.lock().unwrap();
+        let session = self.session.lock().unwrap_or_else(|e| e.into_inner());
 
         let (notes_root, repo_owner) = match session.as_ref() {
             Some(info) => (info.worktree_path.clone(), info.username.clone()),
@@ -1374,7 +1374,7 @@ impl Drop for SecondBrainServer {
         if Arc::strong_count(&self.session) == 1
             && let Some(config) = &self.worktree_config
         {
-            let session = self.session.lock().unwrap();
+            let session = self.session.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(info) = session.as_ref() {
                 tracing::info!("cleaning up worktree for session {}", info.session_id);
                 if let Err(e) = sb_core::worktree::remove_worktree(config, &info.session_id) {

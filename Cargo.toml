@@ -59,6 +59,7 @@ chrono = { version = "0.4", features = ["serde"] }
 walkdir = "2"
 async-trait = "0.1"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+tempfile = "3"
 
 # Workspace crates (internal)
 sb-core = { path = "crates/sb-core" }

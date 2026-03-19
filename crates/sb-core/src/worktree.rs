@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 /// Branches that must never be committed to directly.
-const PROTECTED_BRANCHES: &[&str] = &["main", "master", "staging", "dev"];
+pub const PROTECTED_BRANCHES: &[&str] = &["main", "master", "staging", "dev"];
 
 /// Configuration for the worktree subsystem.
 #[derive(Debug, Clone)]
@@ -45,7 +45,7 @@ pub fn create_worktree(
 ) -> anyhow::Result<SessionInfo> {
     let branch = match branch {
         Some(b) => b.to_string(),
-        None => format!("{username}/working"),
+        None => default_branch(username),
     };
 
     // Validate: must be prefixed with username
@@ -167,6 +167,12 @@ pub fn prune_worktrees(config: &WorktreeConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Build the default branch name for a session (date-stamped).
+pub fn default_branch(username: &str) -> String {
+    let today = chrono::Local::now().format("%Y-%m-%d");
+    format!("{username}/{today}/working")
+}
+
 /// Check that a branch is not already checked out in another worktree.
 fn check_branch_not_checked_out(config: &WorktreeConfig, branch: &str) -> anyhow::Result<()> {
     let output = Command::new("git")
@@ -187,4 +193,205 @@ fn check_branch_not_checked_out(config: &WorktreeConfig, branch: &str) -> anyhow
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    /// Create a temporary git repo with an initial commit on `main`.
+    fn init_test_repo(dir: &std::path::Path) {
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(dir)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.name", "testuser"])
+            .current_dir(dir)
+            .output()
+            .expect("git config user.name");
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(dir)
+            .output()
+            .expect("git config user.email");
+        std::fs::write(dir.join("README.md"), "# test\n").unwrap();
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(dir)
+            .output()
+            .expect("git commit");
+    }
+
+    fn test_config(tmp: &std::path::Path) -> WorktreeConfig {
+        let repo = tmp.join("repo");
+        let wt = tmp.join("worktrees");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&wt).unwrap();
+        init_test_repo(&repo);
+        WorktreeConfig {
+            main_repo: repo,
+            worktree_dir: wt,
+            tracked_branch: "main".into(),
+        }
+    }
+
+    #[test]
+    fn default_branch_contains_today() {
+        let branch = default_branch("alice");
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        assert!(
+            branch.starts_with(&format!("alice/{today}/")),
+            "expected 'alice/{today}/...' but got '{branch}'"
+        );
+        assert!(branch.ends_with("/working"));
+    }
+
+    #[test]
+    fn create_worktree_default_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = test_config(tmp.path());
+
+        let info = create_worktree(&config, "sess-1", "testuser", "test@example.com", None)
+            .expect("create_worktree should succeed");
+
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        assert_eq!(info.branch, format!("testuser/{today}/working"));
+        assert!(info.worktree_path.exists(), "worktree dir should exist");
+
+        // Verify git branch in the worktree
+        let output = Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&info.worktree_path)
+            .output()
+            .unwrap();
+        let wt_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(wt_branch, info.branch);
+
+        remove_worktree(&config, "sess-1").expect("cleanup");
+    }
+
+    #[test]
+    fn create_worktree_custom_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = test_config(tmp.path());
+
+        let info = create_worktree(
+            &config,
+            "sess-2",
+            "alice",
+            "alice@example.com",
+            Some("alice/2026-03-18/notes_on_bees"),
+        )
+        .expect("create_worktree with custom branch");
+
+        assert_eq!(info.branch, "alice/2026-03-18/notes_on_bees");
+        assert!(info.worktree_path.exists());
+
+        remove_worktree(&config, "sess-2").expect("cleanup");
+    }
+
+    #[test]
+    fn rejects_wrong_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = test_config(tmp.path());
+
+        let err = create_worktree(
+            &config,
+            "sess-3",
+            "alice",
+            "alice@example.com",
+            Some("bob/2026-03-18/sneaky"),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("must be prefixed with 'alice/'"),
+            "expected prefix error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_protected_branch() {
+        // Protected branch check happens after prefix validation, so the
+        // branch name must pass the prefix check first. In practice a branch
+        // like "main" will never pass because no username is "main", but
+        // we verify the validation ordering here.
+        let tmp = tempfile::tempdir().unwrap();
+        let config = test_config(tmp.path());
+
+        // "main" fails on prefix before reaching the protected check
+        let err = create_worktree(&config, "sess-4", "alice", "a@e.com", Some("main"))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("must be prefixed"),
+            "expected prefix error for bare 'main', got: {err}"
+        );
+
+        // A branch that passes prefix but matches a protected name can't
+        // happen with the current naming scheme (protected names have no '/'),
+        // so the prefix check is the effective guard.
+    }
+
+    #[test]
+    fn remove_worktree_cleans_up() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = test_config(tmp.path());
+
+        let info = create_worktree(&config, "sess-5", "testuser", "t@e.com", None).unwrap();
+        assert!(info.worktree_path.exists());
+
+        remove_worktree(&config, "sess-5").unwrap();
+        assert!(!info.worktree_path.exists(), "worktree dir should be gone");
+    }
+
+    #[test]
+    fn commit_in_worktree_persists_on_reattach() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = test_config(tmp.path());
+
+        // Create worktree and commit a file
+        let info = create_worktree(&config, "sess-6", "testuser", "t@e.com", None).unwrap();
+        let note = info.worktree_path.join("note.md");
+        std::fs::write(&note, "# Hello\n").unwrap();
+        Command::new("git")
+            .args(["add", "note.md"])
+            .current_dir(&info.worktree_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args([
+                "commit",
+                "--author",
+                "claude-ai <ai@second-brain.local>",
+                "-m",
+                "ai: create note",
+            ])
+            .current_dir(&info.worktree_path)
+            .output()
+            .unwrap();
+
+        let branch = info.branch.clone();
+        remove_worktree(&config, "sess-6").unwrap();
+
+        // Re-attach to the same branch
+        let info2 =
+            create_worktree(&config, "sess-7", "testuser", "t@e.com", Some(&branch)).unwrap();
+        assert_eq!(info2.branch, branch);
+
+        // The committed file should still be there
+        assert!(
+            info2.worktree_path.join("note.md").exists(),
+            "committed note should persist after re-attach"
+        );
+
+        remove_worktree(&config, "sess-7").unwrap();
+    }
 }

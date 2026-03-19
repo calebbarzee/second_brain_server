@@ -218,19 +218,9 @@ impl EmbeddingConfig {
     pub fn resolve(&self) -> ResolvedEmbeddingConfig {
         let preset_name = self
             .preset
-            .as_deref()
-            .or_else(|| {
-                std::env::var("EMBEDDING_PRESET")
-                    .ok()
-                    .as_deref()
-                    .map(|_| unreachable!())
-            })
-            .unwrap_or(DEFAULT_PRESET);
-
-        // Allow env var to set the preset too
-        let preset_name = std::env::var("EMBEDDING_PRESET")
-            .ok()
-            .unwrap_or_else(|| preset_name.to_string());
+            .clone()
+            .or_else(|| std::env::var("EMBEDDING_PRESET").ok())
+            .unwrap_or_else(|| DEFAULT_PRESET.to_string());
 
         let preset = lookup_preset(&preset_name);
         let fallback = lookup_preset(DEFAULT_PRESET).unwrap();

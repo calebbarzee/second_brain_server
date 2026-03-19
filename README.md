@@ -185,6 +185,28 @@ preset = "nomic"
 # max_chunk_chars = 2400
 ```
 
+## Multi-user sessions
+
+When accessed over HTTP, the server supports concurrent editing through git worktrees. Each user session gets an isolated working copy.
+
+### Branch naming
+
+Default: `<username>/<YYYY-MM-DD>/working` (e.g., `alice/2026-03-18/working`)
+
+Custom: pass a `branch` parameter to `session_init` (e.g., `alice/2026-03-18/notes_on_bees`)
+
+### How it works
+
+1. **`session_init`** creates a git worktree on a date-stamped branch
+2. **`note_create`/`note_update`** write to the worktree and auto-commit with AI author identity
+3. Notes are immediately searchable in the DB (ingested on write)
+4. When the session ends, the worktree is cleaned up but the **branch persists**
+5. Merging to `main` is a deliberate step (PR or manual merge)
+
+Protected branches (`main`, `master`, `staging`, `dev`) are never written to directly. AI commits use `--author` so they're distinguishable from human commits in `git log`.
+
+Read-only tools (search, list, read) don't require a session.
+
 ## Architecture
 
 ```
@@ -264,6 +286,26 @@ sb skill summarize --period this-week
 sb projects
 sb classify ~/notes/TODO.md volatile
 ```
+
+## Testing
+
+```bash
+cargo test --workspace          # 95 unit + integration tests
+cargo clippy --workspace        # lint checks
+python3 test-mcp-http.py        # 51 HTTP integration tests (requires running server)
+```
+
+### Test coverage by crate
+
+| Crate | Tests | Coverage |
+|-------|-------|----------|
+| sb-core | 62 | config, ingest, lifecycle, markdown, path_map, project_detect, project_sync, worktree |
+| sb-embed | 10 | chunker, TEI provider |
+| sb-skills | 16 | git_ops (branch validation, commit, snapshot), time_period |
+| sb-sync | 2 | watcher (file change detection) |
+| sb-core (integration) | 5 | DB connection, CRUD, full-text search, pgvector |
+
+DB-dependent modules (db/\*) are covered by the integration test suite (`test-mcp-http.py`) and the `tests/db_integration.rs` tests.
 
 ## Further reading
 

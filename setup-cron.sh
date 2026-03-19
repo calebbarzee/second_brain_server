@@ -32,6 +32,7 @@ step()    { printf "\n${C_BOLD}${C_CYAN}── %s${C_RESET}\n" "$*"; }
 
 INGEST_INTERVAL=30
 REVIEW_TIME="22:00"
+PUSH_TIME="23:00"
 NOTES_DIR=""
 ACTION="install"
 DRY_RUN=false
@@ -54,6 +55,7 @@ Actions (default: install):
 Options:
   --ingest-interval <minutes>   Ingest frequency (default: 30)
   --review-time <HH:MM>        Nightly review time (default: 22:00)
+  --push-time <HH:MM>          Nightly git push time (default: 23:00)
   --notes-dir <path>            Notes directory (auto-detected from config)
   --help                        Show this help
 
@@ -61,6 +63,7 @@ Examples:
   ./setup-cron.sh                                   # Install with defaults
   ./setup-cron.sh --ingest-interval 15              # Ingest every 15 minutes
   ./setup-cron.sh --review-time 21:30               # Nightly review at 9:30pm
+  ./setup-cron.sh --push-time 23:30                 # Nightly push at 11:30pm
   ./setup-cron.sh --list                            # Show installed jobs
   ./setup-cron.sh --remove                          # Remove all sb cron jobs
   ./setup-cron.sh --dry-run                         # Preview without installing
@@ -73,6 +76,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --ingest-interval) INGEST_INTERVAL="$2"; shift 2 ;;
         --review-time)     REVIEW_TIME="$2"; shift 2 ;;
+        --push-time)       PUSH_TIME="$2"; shift 2 ;;
         --notes-dir)       NOTES_DIR="$2"; shift 2 ;;
         --remove)          ACTION="remove"; shift ;;
         --list)            ACTION="list"; shift ;;
@@ -165,6 +169,16 @@ parse_review_time() {
         CATEGORIZE_MINUTE=$((CATEGORIZE_MINUTE - 60))
         CATEGORIZE_HOUR=$(((CATEGORIZE_HOUR + 1) % 24))
     fi
+
+    # Parse push time
+    if ! [[ "$PUSH_TIME" =~ ^[0-9]{1,2}:[0-9]{2}$ ]]; then
+        err "Invalid push time format: $PUSH_TIME (expected HH:MM)"
+        exit 1
+    fi
+    PUSH_HOUR="${PUSH_TIME%%:*}"
+    PUSH_MINUTE="${PUSH_TIME##*:}"
+    PUSH_HOUR="$((10#$PUSH_HOUR))"
+    PUSH_MINUTE="$((10#$PUSH_MINUTE))"
 }
 
 # ── Build cron entries ───────────────────────────────────────────────
@@ -191,6 +205,10 @@ build_cron_entries() {
     # Nightly categorize (5 min after review)
     CRON_ENTRIES+="\n$CRON_TAG — nightly categorize\n"
     CRON_ENTRIES+="${CATEGORIZE_MINUTE} ${CATEGORIZE_HOUR} * * * cd ${PROJECT_DIR} && set -a && . ./.env && set +a && ${cli_bin} skill contextualize --period today --allow-writes 2>>${LOG_FILE}\n"
+
+    # Nightly push all branches
+    CRON_ENTRIES+="\n$CRON_TAG — nightly push all branches\n"
+    CRON_ENTRIES+="${PUSH_MINUTE} ${PUSH_HOUR} * * * cd ${NOTES_DIR} && git push --all 2>>${LOG_FILE}\n"
 }
 
 # ── List existing cron jobs ──────────────────────────────────────────
@@ -272,6 +290,7 @@ install_cron() {
     printf "  ${C_BOLD}Summarize:${C_RESET}       %02d:%02d daily\n" "$REVIEW_HOUR" "$REVIEW_MINUTE"
     printf "  ${C_BOLD}Connect-ideas:${C_RESET}   %02d:%02d daily\n" "$REVIEW_HOUR" "$REVIEW_MINUTE"
     printf "  ${C_BOLD}Categorize:${C_RESET}      %02d:%02d daily\n" "$CATEGORIZE_HOUR" "$CATEGORIZE_MINUTE"
+    printf "  ${C_BOLD}Push branches:${C_RESET}   %02d:%02d daily\n" "$PUSH_HOUR" "$PUSH_MINUTE"
     printf "  ${C_BOLD}Log file:${C_RESET}        %s\n" "$LOG_FILE"
     printf "\n"
 

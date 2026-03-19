@@ -68,11 +68,10 @@ impl Skill for ConnectIdeasSkill {
                     continue;
                 }
 
-                // Check if they're in different "contexts" (different projects or different paths)
+                // Check if they're in different "contexts" (different directories)
                 let same_dir = std::path::Path::new(&note.file_path).parent()
                     == std::path::Path::new(&result.note_file_path).parent();
-                let cross_context =
-                    !same_dir || note.source_project != Some(result.note_file_path.clone());
+                let cross_context = !same_dir;
 
                 connections.push(serde_json::json!({
                     "note_a": {

@@ -152,16 +152,18 @@ impl Skill for SummarizeSkill {
                 all_completed_tasks.len(),
             );
 
-            if let Some(parent) = note_path.parent() {
-                std::fs::create_dir_all(parent).ok();
+            if let Some(parent) = note_path.parent()
+                && let Err(e) = std::fs::create_dir_all(parent)
+            {
+                tracing::warn!("failed to create summary directory: {e}");
             }
             std::fs::write(&note_path, &content)?;
 
             // Ingest the new note
             let mapper = sb_core::PathMapper::new(ctx.notes_root.clone());
-            sb_core::ingest::ingest_file(&ctx.db, &note_path, &mapper)
-                .await
-                .ok();
+            if let Err(e) = sb_core::ingest::ingest_file(&ctx.db, &note_path, &mapper).await {
+                tracing::warn!("failed to ingest summary note: {e}");
+            }
 
             output
                 .notes_created

@@ -168,14 +168,16 @@ impl Skill for ReflectSkill {
                 stale_notes.len(),
             );
 
-            if let Some(parent) = note_path.parent() {
-                std::fs::create_dir_all(parent).ok();
+            if let Some(parent) = note_path.parent()
+                && let Err(e) = std::fs::create_dir_all(parent)
+            {
+                tracing::warn!("failed to create reflection directory: {e}");
             }
             std::fs::write(&note_path, &content)?;
             let mapper = sb_core::PathMapper::new(ctx.notes_root.clone());
-            sb_core::ingest::ingest_file(&ctx.db, &note_path, &mapper)
-                .await
-                .ok();
+            if let Err(e) = sb_core::ingest::ingest_file(&ctx.db, &note_path, &mapper).await {
+                tracing::warn!("failed to ingest reflection note: {e}");
+            }
 
             output
                 .notes_created

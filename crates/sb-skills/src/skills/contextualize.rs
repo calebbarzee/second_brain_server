@@ -49,8 +49,8 @@ impl Skill for ContextualizeSkill {
         let mut modified_paths = Vec::new();
 
         for note in &target_notes {
-            // Skip enduring notes (never auto-modify)
-            if note.lifecycle == "enduring" && !params.allow_writes {
+            // Skip enduring notes (never auto-modify, regardless of flags)
+            if note.lifecycle == "enduring" {
                 continue;
             }
 

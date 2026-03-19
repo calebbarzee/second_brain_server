@@ -86,8 +86,13 @@ impl LlmProvider for AnthropicProvider {
             .as_array()
             .and_then(|arr| arr.first())
             .and_then(|block| block["text"].as_str())
-            .unwrap_or("")
-            .to_string();
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Anthropic API returned unexpected response structure: {}",
+                    serde_json::to_string(&resp_body).unwrap_or_default()
+                )
+            })?;
 
         Ok(text)
     }
